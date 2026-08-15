@@ -290,6 +290,46 @@ TEST(unknown_component_pools_are_skipped_not_fatal) {
     CHECK_EQ(target.world.pool<Transform>().size(), size_t{1});
 }
 
+TEST(cluster_order_is_only_resorted_once_motion_has_loosened_it) {
+    Scene scene;
+    std::mt19937 rng(77);
+    std::uniform_real_distribution<float> p(-100.0f, 100.0f);
+    std::vector<Entity> spawned;
+    for (int i = 0; i < 20000; ++i) {
+        Entity e = scene.create(trs(Vec3{p(rng), p(rng), p(rng)}));
+        scene.world.add<Renderable>(e, Renderable{static_cast<uint32_t>(i % 3), 0, 1, 0});
+        CullBounds cb;
+        cb.localExtent = Vec3{0.5f, 0.5f, 0.5f};
+        scene.world.add<CullBounds>(e, cb);
+        spawned.push_back(e);
+    }
+    JobSystem jobs(4);
+    scene.updateTransforms(&jobs);
+
+    CullSystem culler;
+    culler.sortSpatially(scene);
+    CHECK_EQ(culler.stats().sorts, uint32_t{1});
+    CHECK(culler.spreadBaseline() > 0.0f);
+
+    culler.maintain(scene);
+    CHECK_EQ(culler.stats().sorts, uint32_t{1});
+
+    for (Entity e : spawned) scene.world.tryGet<Transform>(e)->position = Vec3{p(rng), p(rng), p(rng)};
+    scene.updateTransforms(&jobs);
+    culler.maintain(scene);
+    CHECK_EQ(culler.stats().sorts, uint32_t{2});
+
+    Mat4 vp = perspective(radians(60.0f), 16.0f / 9.0f, 0.5f, 220.0f) *
+              lookAt(Vec3{0, 30, 110}, Vec3{0, 0, 0}, Vec3{0, 1, 0});
+    Frustum f = extractFrustum(vp);
+    CullSystem flat;
+    flat.useClusters = false;
+    RenderList flatList, clusteredList;
+    flat.build(scene, f, 1, flatList, &jobs);
+    culler.build(scene, f, 1, clusteredList, &jobs);
+    CHECK_EQ(clusteredList.visible, flatList.visible);
+}
+
 TEST(spatial_clustering_matches_the_flat_cull_and_skips_most_objects) {
     Scene scene;
     std::mt19937 rng(404);

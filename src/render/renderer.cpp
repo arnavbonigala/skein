@@ -149,6 +149,9 @@ void Renderer::render(Scene& scene, const Assets& assets, const Mat4& view, cons
     collectLights(scene, cameraPosition);
 
     Clock::time_point cullStart = Clock::now();
+    // The Morton order decays as objects move; maintain() re-sorts only once
+    // the clusters have loosened enough to stop paying for themselves.
+    if (options.frustumCulling && (frameIndex_++ % 30) == 0) culler_.maintain(scene);
     culler_.build(scene, frustum, static_cast<uint32_t>(assets.materialCount()), mainList_, jobs,
                   options.frustumCulling);
 

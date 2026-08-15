@@ -78,6 +78,7 @@ private:
 
     CullSystem culler_;
     CullSystem shadowCuller_;
+    uint64_t frameIndex_ = 0;
     RenderList mainList_;
     RenderList shadowList_;
 

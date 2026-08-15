@@ -81,14 +81,16 @@ public:
     float resortThreshold = 1.6f;
 
     const CullStats& stats() const { return stats_; }
-    /// Mean cluster diagonal over the mean object diagonal. 1 means clusters
-    /// are as tight as their members; large values mean the order has decayed.
+    /// Mean cluster half-diagonal now, and what it was straight after the last
+    /// sort. The ratio is how far the Morton order has decayed.
     float clusterSpread() const { return spread_; }
+    float spreadBaseline() const { return baseline_; }
 
     size_t bytesUsed() const;
 
 private:
     void buildClusters(Scene& scene, JobSystem* jobs);
+    float measureSpread() const;
 
     struct ClusterBounds {
         Vec3 center;
@@ -109,7 +111,8 @@ private:
     std::vector<CullBounds> boundsScratch_;
     std::vector<WorldTransform> worldScratch_;
     CullStats stats_;
-    float spread_ = 1.0f;
+    float spread_ = 0.0f;
+    float baseline_ = 0.0f;
 };
 
 }  // namespace skein

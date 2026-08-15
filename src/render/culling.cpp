@@ -96,6 +96,9 @@ void CullSystem::sortSpatially(Scene& scene) {
             worlds.permute(worldOrder, denseScratch_, worldScratch_);
         }
     }
+    buildClusters(scene, nullptr);
+    baseline_ = measureSpread();
+    spread_ = baseline_;
     ++stats_.sorts;
 }
 
@@ -143,29 +146,26 @@ void CullSystem::buildClusters(Scene& scene, JobSystem* jobs) {
         body(0, count);
 }
 
+float CullSystem::measureSpread() const {
+    if (clusters_.empty()) return 0.0f;
+    double total = 0;
+    for (const ClusterBounds& c : clusters_) total += length(c.extent);
+    return static_cast<float>(total / static_cast<double>(clusters_.size()));
+}
+
 void CullSystem::maintain(Scene& scene) {
     if (!useClusters) return;
     Pool<CullBounds>& bounds = scene.world.pool<CullBounds>();
-    if (clusters_.empty() || bounds.data.empty()) {
+    if (clusters_.empty() || bounds.data.empty() || baseline_ <= 0.0f) {
         sortSpatially(scene);
         return;
     }
-    double clusterDiagonal = 0;
-    for (const ClusterBounds& c : clusters_) clusterDiagonal += length(c.extent);
-    clusterDiagonal /= static_cast<double>(clusters_.size());
-
-    double objectDiagonal = 0;
-    const size_t sampleStride = std::max<size_t>(1, bounds.data.size() / 512);
-    size_t samples = 0;
-    for (size_t i = 0; i < bounds.data.size(); i += sampleStride) {
-        objectDiagonal += length(bounds.data[i].extent);
-        ++samples;
-    }
-    objectDiagonal /= static_cast<double>(std::max<size_t>(samples, 1));
-
-    float ideal = static_cast<float>(objectDiagonal) * std::cbrt(static_cast<float>(CLUSTER_SIZE));
-    spread_ = ideal > 1e-6f ? static_cast<float>(clusterDiagonal) / ideal : 1.0f;
-    if (spread_ > resortThreshold) sortSpatially(scene);
+    buildClusters(scene, nullptr);
+    spread_ = measureSpread();
+    // Clusters only loosen as their members drift apart, so the mean cluster
+    // size straight after a sort is the right baseline. Scene density varies
+    // far too much for an absolute threshold to mean anything.
+    if (spread_ > baseline_ * resortThreshold) sortSpatially(scene);
 }
 
 void CullSystem::build(Scene& scene, const Frustum& frustum, uint32_t materialCount, RenderList& out,
