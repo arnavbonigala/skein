@@ -61,7 +61,7 @@ thieves. The submitting thread participates rather than blocking, so nested
 queues one task per worker, not one per chunk, and the chunks are handed out
 through an atomic cursor: the queue mutex and the `std::function` allocation
 are paid once per thread instead of once per chunk, which took a 64-chunk
-dispatch from 34.5 µs to 5.2 µs. That floor matters because the coloured solver
+dispatch from 34.5 µs to 3.2 µs. That floor matters because the coloured solver
 pays it once per colour per iteration.
 
 **Renderer** — OpenGL 4.1 core against the macOS system framework, so no
@@ -145,7 +145,7 @@ are means over 200 frames from `skein_demo --capture 200`.
 
 Both harnesses build the same world from `Demo::build`: **112,025 entities**,
 100,000 of them integrating position and rotation every frame, **37,000
-renderable**, 30,000 rigid bodies piled densely enough to generate ~63,000
+renderable**, 30,000 rigid bodies piled densely enough to generate ~62,000
 contacts a step, 25 lights, 6 meshes, 6 materials, 31.6 MB resident. The
 interactive demo also runs `assets/scripts/demo.lua` on top, which adds 316
 scripted entities — 112,341 entities and 37,316 renderables in the render
@@ -155,18 +155,18 @@ table below.
 
 | Pass | 1 thread | 8 threads | Speedup |
 |---|---|---|---|
-| ECS iteration (100k integrate) | 0.700 ms — 7.0 ns/entity | 0.265 ms — 2.6 ns/entity | 2.64x |
-| Transform hierarchy (112k) | 0.819 ms — 7.3 ns/entity | 0.446 ms — 4.0 ns/entity | 1.84x |
-| Physics step (30k bodies, 63k contacts) | 16.78 ms — 560 ns/body | 7.95 ms — 265 ns/body | 2.11x |
-| Cull + batch (37k candidates) | 0.611 ms — 16.5 ns/object | 0.352 ms — 9.5 ns/object | 1.73x |
-| **Full simulation frame** | **18.69 ms (54 fps)** | **7.75 ms (129 fps)** | **2.41x** |
+| ECS iteration (100k integrate) | 0.776 ms — 7.8 ns/entity | 0.242 ms — 2.4 ns/entity | 3.20x |
+| Transform hierarchy (112k) | 0.765 ms — 6.8 ns/entity | 0.425 ms — 3.8 ns/entity | 1.80x |
+| Physics step (30k bodies, 62k contacts) | 16.18 ms — 539 ns/body | 6.80 ms — 227 ns/body | 2.38x |
+| Cull + batch (37k candidates) | 0.583 ms — 15.8 ns/object | 0.371 ms — 10.0 ns/object | 1.57x |
+| **Full simulation frame** | **18.40 ms (54 fps)** | **6.93 ms (144 fps)** | **2.66x** |
 
 Thread scaling on the full simulation frame:
 
 | Threads | 1 | 2 | 3 | 4 | 6 | 8 |
 |---|---|---|---|---|---|---|
-| ms | 17.47 | 9.72 | 8.98 | 6.65 | 6.68 | 7.14 |
-| speedup | 1.07x | 1.92x | 2.08x | 2.81x | 2.80x | 2.62x |
+| ms | 18.40 | 9.48 | 6.98 | 5.68 | 6.28 | 6.13 |
+| speedup | 1.00x | 1.94x | 2.64x | 3.24x | 2.93x | 3.00x |
 
 Scaling flattens past four threads because the M3's four efficiency cores are
 roughly a third the throughput of its performance cores, and because the
@@ -176,21 +176,21 @@ Where the frame actually goes, from the built-in profiler at 8 threads:
 
 | Zone | avg | p95 |
 |---|---|---|
-| physics/solve | 3.14 ms | 3.51 ms |
-| physics/narrowphase | 1.80 ms | 2.16 ms |
-| physics/broadphase | 0.92 ms | 1.07 ms |
-| scene/updateTransforms | 0.70 ms | 0.79 ms |
-| physics/impulseCache | 0.32 ms | 0.42 ms |
-| render/cull | 0.29 ms | 0.39 ms |
-| physics/gather | 0.27 ms | 0.28 ms |
+| physics/solve | 2.54 ms | 3.31 ms |
+| physics/narrowphase | 1.86 ms | 2.10 ms |
+| physics/broadphase | 0.90 ms | 1.01 ms |
+| scene/updateTransforms | 0.63 ms | 0.72 ms |
+| physics/impulseCache | 0.29 ms | 0.38 ms |
+| render/cull | 0.27 ms | 0.36 ms |
+| physics/gather | 0.26 ms | 0.27 ms |
 | physics/color | 0.25 ms | 0.27 ms |
-| ecs/kinematics | 0.25 ms | 0.33 ms |
-| physics/impulseStore | 0.22 ms | 0.29 ms |
-| physics/scatter | 0.10 ms | 0.15 ms |
-| physics/integrate | 0.05 ms | 0.08 ms |
-| render/clusterBounds | 0.04 ms | 0.08 ms |
-| physics/sleep | 0.04 ms | 0.06 ms |
-| render/batchSort | 0.04 ms | 0.07 ms |
+| ecs/kinematics | 0.24 ms | 0.31 ms |
+| physics/impulseStore | 0.22 ms | 0.28 ms |
+| physics/scatter | 0.09 ms | 0.12 ms |
+| physics/sleep | 0.04 ms | 0.07 ms |
+| render/clusterBounds | 0.04 ms | 0.07 ms |
+| physics/integrate | 0.03 ms | 0.05 ms |
+| render/batchSort | 0.03 ms | 0.06 ms |
 
 ### Cluster culling over Morton-ordered pools
 
@@ -209,7 +209,7 @@ instead of through the sparse map.
 
 | | Flat, one test per object | Clustered over Morton order |
 |---|---|---|
-| Cull + batch | 0.288 ms — 7.8 ns/object | **0.207 ms — 5.6 ns/object (1.39x)** |
+| Cull + batch | 0.296 ms — 8.0 ns/object | **0.220 ms — 5.9 ns/object (1.35x)** |
 | Objects individually tested | 37,000 | **4,672 (87.4% resolved by their cluster)** |
 | Visible | 25,224 | 25,224 |
 
@@ -225,7 +225,7 @@ threshold. Over 800 frames of continuous motion:
 | | Median cull | Order decay | Re-sorts | Objects tested |
 |---|---|---|---|---|
 | Sorted once | 0.280 ms | 1.72x | 1 | 10,848 |
-| Maintained every 30 frames | 0.277 ms | **1.01x** | 2 | **4,848** |
+| Maintained every 30 frames | 0.274 ms | **1.01x** | 2 | **4,896** |
 
 The win depends on how much of the scene is on screen — clustering has nothing
 to skip when everything is visible-adjacent, and nothing to gain when a cheap
@@ -309,8 +309,8 @@ saving is work, not parallelism:
 
 | Scene | Sleeping off | Sleeping on | |
 |---|---|---|---|
-| 4,000 in a box, 30 s to settle | 1.65 ms — 4,000 awake, 12,082 contacts | **0.30 ms** — 121 awake, 589 contacts | **5.52x** |
-| 30,000 demo field, still churning | 14.89 ms — 30,000 awake | 16.06 ms — 27,535 awake | 0.93x |
+| 4,000 in a box, 30 s to settle | 1.55 ms — 4,000 awake, 12,082 contacts | **0.29 ms** — 110 awake, 511 contacts | **5.45x** |
+| 30,000 demo field, still churning | 14.69 ms — 30,000 awake | 14.90 ms — 27,455 awake | 0.99x |
 
 The second row is the point of the first: a pile that never settles pays only
 the bookkeeping for a feature it cannot use.
@@ -322,9 +322,9 @@ which at the top speed is 3.7 m of travel in a 1/60 s step:
 
 | Substep cap | Step cost | Passed through |
 |---|---|---|
-| 1 (splitting off) | 0.035 ms | 292 of 400 |
-| 4 (the default) | 0.147 ms | 85 of 400 |
-| 16 | 0.047 ms | **0 of 400** |
+| 1 (splitting off) | 0.026 ms | 292 of 400 |
+| 4 (the default) | 0.197 ms | 85 of 400 |
+| 16 | 0.079 ms | **0 of 400** |
 
 The tightest cap is not the slowest: a shot that stops at the wall stops needing
 splits, while every shot that escapes keeps moving fast enough to split every
@@ -374,9 +374,9 @@ time on top.
 
 | | |
 |---|---|
-| Serialize 112,025 entities | 1.85 ms → 21.0 MB (11.1 GB/s) |
-| Deserialize | 4.66 ms (4.4 GB/s), entity ids preserved exactly |
-| Lua per-entity callbacks | 0.393 ms for 5,000 scripts — 78.6 ns/callback |
+| Serialize 112,025 entities | 1.59 ms → 21.3 MB (13.1 GB/s) |
+| Deserialize | 3.97 ms (5.2 GB/s), entity ids preserved exactly |
+| Lua per-entity callbacks | 0.400 ms for 5,000 scripts — 79.9 ns/callback |
 | ECS pools / physics / culling / Lua heap | 28.0 MB / 23.6 MB / 917 KB / 385 KB |
 
 ## Demo controls
