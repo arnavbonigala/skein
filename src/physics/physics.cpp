@@ -75,62 +75,71 @@ void PhysicsWorld::gather(Scene& scene) {
     Pool<Transform>& transforms = scene.world.pool<Transform>();
     Pool<Velocity>& velocities = scene.world.pool<Velocity>();
 
+    // Eleven push_backs per body means eleven size counters kept live across
+    // the loop; writing through a single cursor into pre-sized arrays is the
+    // same work with one. A collider without a transform is skipped, so the
+    // cursor can trail the source index and the arrays shrink at the end.
     size_t n = colliders.dense.size();
-    entity_.clear();
-    position_.clear();
-    velocity_.clear();
-    halfExtent_.clear();
-    radius_.clear();
-    invMass_.clear();
-    restitution_.clear();
-    kind_.clear();
-    sleepTimer_.clear();
-    asleep_.clear();
-    reach_.clear();
-    reach_.reserve(n);
-    entity_.reserve(n);
-    position_.reserve(n);
-    velocity_.reserve(n);
-    halfExtent_.reserve(n);
-    radius_.reserve(n);
-    invMass_.reserve(n);
-    restitution_.reserve(n);
-    kind_.reserve(n);
-    sleepTimer_.reserve(n);
-    asleep_.reserve(n);
+    entity_.resize(n);
+    position_.resize(n);
+    velocity_.resize(n);
+    halfExtent_.resize(n);
+    radius_.resize(n);
+    invMass_.resize(n);
+    restitution_.resize(n);
+    kind_.resize(n);
+    sleepTimer_.resize(n);
+    asleep_.resize(n);
+    reach_.resize(n);
 
     maxReach_ = 0.0f;
     double reachSum = 0.0;
+    const float sleepSpeed2 = settings.sleepSpeed * settings.sleepSpeed;
+    size_t m = 0;
     for (size_t i = 0; i < n; ++i) {
         Entity e = colliders.dense[i];
         const Transform* t = transforms.tryGet(e);
         if (!t) continue;
         const Collider& c = colliders.data[i];
         const Velocity* v = velocities.tryGet(e);
-        entity_.push_back(e);
-        position_.push_back(t->position);
-        velocity_.push_back(v ? v->linear : Vec3{0, 0, 0});
+        Vec3 linear = v ? v->linear : Vec3{0, 0, 0};
         float s = maxComponent(vabs(t->scale));
-        halfExtent_.push_back(c.halfExtents * s);
-        radius_.push_back(c.radius * s);
-        invMass_.push_back(c.invMass);
-        restitution_.push_back(c.restitution);
-        kind_.push_back(c.kind);
-        sleepTimer_.push_back(c.sleepTimer);
+        entity_[m] = e;
+        position_[m] = t->position;
+        velocity_[m] = linear;
+        halfExtent_[m] = c.halfExtents * s;
+        radius_[m] = c.radius * s;
+        invMass_[m] = c.invMass;
+        restitution_[m] = c.restitution;
+        kind_[m] = c.kind;
+        sleepTimer_[m] = c.sleepTimer;
         // Anything outside physics that gives a sleeper velocity — a script, the
         // editor, a loaded scene — has to wake it, or it hangs wherever it was
         // put. ponytail: a teleport that leaves velocity alone still will not
         // wake it; store the last scattered position if that ever comes up.
-        bool asleep = settings.allowSleep && c.asleep != 0;
-        if (asleep && length2(velocity_.back()) > settings.sleepSpeed * settings.sleepSpeed) asleep = false;
-        asleep_.push_back(asleep ? uint8_t{1} : uint8_t{0});
+        bool asleep = settings.allowSleep && c.asleep != 0 && length2(linear) <= sleepSpeed2;
+        asleep_[m] = asleep ? uint8_t{1} : uint8_t{0};
         float reach = c.kind == static_cast<uint32_t>(ColliderKind::Sphere) ? c.radius * s
                                                                            : length(c.halfExtents * s);
-        reach_.push_back(reach);
+        reach_[m] = reach;
         maxReach_ = std::max(maxReach_, reach);
         reachSum += reach;
+        ++m;
     }
-    meanReach_ = position_.empty() ? 0.0f : static_cast<float>(reachSum / static_cast<double>(position_.size()));
+    if (m != n) {
+        entity_.resize(m);
+        position_.resize(m);
+        velocity_.resize(m);
+        halfExtent_.resize(m);
+        radius_.resize(m);
+        invMass_.resize(m);
+        restitution_.resize(m);
+        kind_.resize(m);
+        sleepTimer_.resize(m);
+        asleep_.resize(m);
+        reach_.resize(m);
+    }
+    meanReach_ = m == 0 ? 0.0f : static_cast<float>(reachSum / static_cast<double>(m));
 }
 
 void PhysicsWorld::integrate(float dt, JobSystem* jobs) {
