@@ -31,7 +31,7 @@ Requires CMake 3.20, a C++20 compiler, Lua and (for the interactive demo) GLFW.
 brew install cmake lua glfw
 cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
 cmake --build build -j
-./build/skein_tests     # 90 tests
+./build/skein_tests     # 91 tests
 ./build/skein_bench     # headless CPU benchmark
 ./build/skein_bench --sweep   # plus the 25k to 1M scaling sweep
 ./build/skein_demo      # interactive window
@@ -511,7 +511,7 @@ objects drop out, `O` pauses, `P` dumps the frame profile, `V` toggles vsync,
 
 ## Tests
 
-90 tests, no framework. They cover the parts where being wrong is quiet: the
+91 tests, no framework. They cover the parts where being wrong is quiet: the
 hashed grid must return exactly the brute-force contact set even when collider
 sizes vary 70x, the coloured parallel solver must land bitwise on the serial
 result, a stack of eight spheres must still be standing after ten seconds, a
@@ -520,7 +520,8 @@ not and must wake when a script throws it somewhere else, a body crossing
 twelve times its own radius in one step must not end up on the far side of a
 wall, an off-centre hit must spin the body it lands on while a hit through the
 centres must not, a box set down on a face must rest on four contacts rather
-than balance on one and must slide upright when pushed, a slab must tumble end
+than balance on one and must slide upright when pushed, sixteen columns of
+eight turned boxes must all still be standing after ten seconds, a slab must tumble end
 over end at least five times more readily than it spins about its own length,
 a skidding ball must end up rolling and then stop, clustered
 culling must keep exactly the objects the flat path keeps and

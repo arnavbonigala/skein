@@ -912,3 +912,35 @@ TEST(a_ray_meets_a_turned_box_where_its_face_actually_is) {
     // And a ray that would have hit the axis-aligned corner misses entirely.
     CHECK(!physics.raycast(Vec3{0.9f, 5, 0.9f}, Vec3{0, -1, 0}, 20.0f).hit);
 }
+
+TEST(a_field_of_turned_columns_is_still_standing_after_ten_seconds) {
+    // Sixteen columns rather than one, because a single column stands on far
+    // less than the default solver setting: it is the neighbours' contacts
+    // arriving in the same colour pass that a weaker mix of substeps and
+    // iterations cannot keep up with. This is the case the benchmark's
+    // substep-by-iteration matrix separates, pinned at the default.
+    Scene scene;
+    spawnBox(scene, Vec3{0, -1, 0}, Quat{}, Vec3{40, 1, 40}, 0.0f);
+    std::vector<Entity> tops;
+    for (int c = 0; c < 16; ++c) {
+        const float x = static_cast<float>(c % 4) * 4.0f - 6.0f;
+        const float z = static_cast<float>(c / 4) * 4.0f - 6.0f;
+        for (int i = 0; i < 8; ++i) {
+            Entity e = spawnBox(scene, Vec3{x, 0.5f + static_cast<float>(i) * 1.02f, z},
+                                Quat::axisAngle(Vec3{0, 1, 0}, 0.35f * static_cast<float>(i + c)),
+                                Vec3{0.5f, 0.5f, 0.5f});
+            if (i == 7) tops.push_back(e);
+        }
+    }
+
+    PhysicsWorld physics;
+    physics.settings.useBounds = false;
+    physics.settings.allowSleep = false;
+    for (int f = 0; f < 600; ++f) physics.step(scene, 1.0f / 60.0f, nullptr);
+
+    for (Entity e : tops) {
+        const Transform& t = scene.world.get<Transform>(e);
+        CHECK(t.position.y > 7.0f);
+        CHECK(rotate(t.rotation, Vec3{0, 1, 0}).y > 0.95f);
+    }
+}
