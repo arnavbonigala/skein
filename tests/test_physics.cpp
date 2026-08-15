@@ -194,3 +194,71 @@ TEST(sphere_resolves_against_a_box_collider) {
     CHECK(y > 0.4f);
     CHECK(y < 1.6f);
 }
+
+TEST(broadphase_stays_exact_when_collider_sizes_vary_wildly) {
+    std::mt19937 rng(91);
+    std::uniform_real_distribution<float> p(-30.0f, 30.0f);
+    std::uniform_real_distribution<float> small(0.1f, 0.5f);
+    std::uniform_real_distribution<float> huge(3.0f, 7.0f);
+
+    Scene scene;
+    std::vector<Vec3> positions;
+    std::vector<float> radii;
+    for (int i = 0; i < 4000; ++i) {
+        Vec3 pos{p(rng), p(rng), p(rng)};
+        float rad = (i % 40 == 0) ? huge(rng) : small(rng);
+        positions.push_back(pos);
+        radii.push_back(rad);
+        spawnSphere(scene, pos, Vec3{0, 0, 0}, rad);
+    }
+
+    PhysicsWorld physics;
+    physics.settings.gravity = Vec3{0, 0, 0};
+    physics.settings.linearDamping = 0.0f;
+    physics.settings.useBounds = false;
+    physics.settings.cellSize = 1.0f;
+    PhysicsStats stats = physics.step(scene, 0.0f, nullptr);
+
+    auto expected = bruteForceOverlaps(positions, radii);
+    CHECK(!expected.empty());
+    CHECK_EQ(static_cast<size_t>(stats.contacts), expected.size());
+}
+
+TEST(coloured_solver_matches_between_one_thread_and_many) {
+    auto buildPile = [](Scene& scene) {
+        std::mt19937 rng(5);
+        std::uniform_real_distribution<float> p(-6.0f, 6.0f);
+        std::uniform_real_distribution<float> h(0.5f, 22.0f);
+        std::uniform_real_distribution<float> rad(0.35f, 0.8f);
+        for (int i = 0; i < 4000; ++i)
+            spawnSphere(scene, Vec3{p(rng), h(rng), p(rng)}, Vec3{0, 0, 0}, rad(rng));
+    };
+
+    Scene serialScene, threadedScene;
+    buildPile(serialScene);
+    buildPile(threadedScene);
+
+    PhysicsWorld serialPhysics, threadedPhysics;
+    serialPhysics.settings.boundsMin = threadedPhysics.settings.boundsMin = Vec3{-8, 0, -8};
+    serialPhysics.settings.boundsMax = threadedPhysics.settings.boundsMax = Vec3{8, 40, 8};
+    JobSystem jobs(6);
+
+    PhysicsStats last{};
+    for (int i = 0; i < 90; ++i) {
+        serialPhysics.step(serialScene, 1.0f / 60.0f, nullptr);
+        last = threadedPhysics.step(threadedScene, 1.0f / 60.0f, &jobs);
+    }
+
+    CHECK(last.contacts > 2000);
+    CHECK(last.colors > 1);
+
+    Pool<Transform>& a = serialScene.world.pool<Transform>();
+    Pool<Transform>& b = threadedScene.world.pool<Transform>();
+    CHECK_EQ(a.data.size(), b.data.size());
+    for (size_t i = 0; i < a.data.size(); ++i) {
+        CHECK_EQ(a.dense[i], b.dense[i]);
+        CHECK(a.data[i].position.x == b.data[i].position.x);
+        CHECK(a.data[i].position.y == b.data[i].position.y);
+        CHECK(a.data[i].position.z == b.data[i].position.z);
+    }
+}

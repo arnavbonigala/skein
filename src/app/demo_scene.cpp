@@ -64,9 +64,15 @@ void Demo::build(const DemoConfig& cfg, JobSystem* jobs) {
     std::vector<Entity> renderables;
     renderables.reserve(static_cast<size_t>(cfg.renderableCount));
 
+    const float pileExtent = cfg.fieldExtent * 0.14f;
+    std::uniform_real_distribution<float> pilePlanar(-pileExtent, pileExtent);
+    std::uniform_real_distribution<float> pileVertical(1.0f, cfg.fieldHeight * 0.55f);
+
     for (int i = 0; i < cfg.entityCount; ++i) {
         Transform t;
-        t.position = Vec3{planar(rng), vertical(rng), planar(rng)};
+        const bool simulated = i < cfg.colliderCount;
+        t.position = simulated ? Vec3{pilePlanar(rng), pileVertical(rng), pilePlanar(rng)}
+                               : Vec3{planar(rng), vertical(rng), planar(rng)};
         float s = 0.6f + unit(rng) * 1.6f;
         t.scale = Vec3{s, s * (0.7f + unit(rng) * 0.7f), s};
         t.rotation = Quat::euler(signedUnit(rng) * PI, signedUnit(rng) * PI, 0.0f);
@@ -92,7 +98,7 @@ void Demo::build(const DemoConfig& cfg, JobSystem* jobs) {
             renderables.push_back(e);
         }
 
-        if (i < cfg.colliderCount) {
+        if (simulated) {
             Collider c;
             bool box = (rng() % 3) == 0;
             c.kind = box ? static_cast<uint32_t>(ColliderKind::Box) : static_cast<uint32_t>(ColliderKind::Sphere);

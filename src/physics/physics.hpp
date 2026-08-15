@@ -13,6 +13,8 @@ class JobSystem;
 struct PhysicsSettings {
     Vec3 gravity{0.0f, -9.81f, 0.0f};
     float linearDamping = 0.02f;
+    /// Lower bound on the broadphase cell. The grid widens itself to fit the
+    /// largest collider, so a value below that is raised rather than obeyed.
     float cellSize = 2.0f;
     float restitutionFloor = 0.35f;
     /// Optional axis-aligned box the simulation keeps bodies inside.
@@ -27,6 +29,14 @@ struct PhysicsStats {
     uint64_t pairsTested = 0;
     uint32_t contacts = 0;
     uint32_t gridCells = 0;
+    /// Independent sets the contact graph was coloured into, plus the tail of
+    /// contacts that ran out of colours and are solved serially.
+    uint32_t colors = 0;
+    uint32_t serialContacts = 0;
+    /// Cell registrations, which exceeds the body count when colliders span
+    /// more than one cell.
+    uint32_t gridEntries = 0;
+    float cellSize = 0;
 };
 
 /// Broadphase is a hashed uniform grid built with a counting sort, so the
@@ -51,8 +61,10 @@ private:
     void integrate(float dt, JobSystem* jobs);
     void buildGrid(JobSystem* jobs);
     void findContacts(JobSystem* jobs);
-    void resolve();
-    void scatter(Scene& scene);
+    void colorContacts();
+    void solveRange(uint32_t begin, uint32_t end, bool positional);
+    void resolve(JobSystem* jobs);
+    void scatter(Scene& scene, JobSystem* jobs);
 
     std::vector<Entity> entity_;
     std::vector<Vec3> position_;
@@ -63,13 +75,30 @@ private:
     std::vector<float> restitution_;
     std::vector<uint32_t> kind_;
 
-    std::vector<int32_t> cellCoord_;
-    std::vector<uint32_t> bucketOf_;
+    std::vector<float> reach_;
+    std::vector<int32_t> bodyLo_;
+    std::vector<int32_t> bodyHi_;
+    std::vector<uint32_t> entryOffset_;
+    std::vector<uint32_t> entryBucket_;
     std::vector<uint32_t> cellStart_;
-    std::vector<uint32_t> sorted_;
+    struct GridEntry {
+        float x, y, z, reach;
+        uint64_t cell;
+        uint32_t body;
+        uint32_t pad;
+    };
+    std::vector<GridEntry> entries_;
     std::vector<std::vector<Contact>> contactChunks_;
     std::vector<Contact> contacts_;
+    std::vector<uint64_t> bodyColorMask_;
+    std::vector<uint32_t> contactColor_;
+    std::vector<uint32_t> colorStart_;
+    std::vector<uint32_t> colorOrder_;
     uint32_t bucketMask_ = 0;
+    uint32_t colorCount_ = 0;
+    float cell_ = 2.0f;
+    float maxReach_ = 0.0f;
+    float meanReach_ = 0.0f;
 
     PhysicsStats stats_;
 };

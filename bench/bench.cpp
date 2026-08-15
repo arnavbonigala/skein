@@ -176,6 +176,25 @@ int main(int argc, char** argv) {
     row("job system", frameParallel.median,
         format("%.0f fps ceiling, ", 1000.0 / frameParallel.median) + speedup(frameSerial.median, frameParallel.median));
 
+    heading("frame phase breakdown (job system)");
+    {
+        Profiler& profiler = Profiler::instance();
+        profiler.reset();
+        for (int i = 0; i < iterations; ++i) {
+            profiler.beginFrame();
+            demo.update(1.0f / 60.0f, &jobs);
+            culler.build(demo.scene, frustum, 6, list, &jobs, true);
+            profiler.endFrame();
+        }
+        std::vector<ZoneStats> zones = profiler.stats();
+        std::sort(zones.begin(), zones.end(), [](const ZoneStats& a, const ZoneStats& b) { return a.avgMs > b.avgMs; });
+        for (const ZoneStats& z : zones) {
+            if (z.avgMs < 0.005) continue;
+            std::printf("  %-38s %9.3f ms   p95 %6.3f  max %6.3f  %u calls/frame\n", z.name.c_str(), z.avgMs, z.p95Ms,
+                        z.maxMs, z.calls);
+        }
+    }
+
     heading("job system scaling (full frame update)");
     for (int workers : {0, 1, 2, 3, 5, 7, 9, 11, 15}) {
         if (workers > static_cast<int>(hw) - 1) break;
