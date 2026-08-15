@@ -15,6 +15,7 @@ void registerCoreComponents() {
     registerComponent<Parent>("Parent");
     registerComponent<Velocity>("Velocity");
     registerComponent<Collider>("Collider");
+    registerComponent<Joint>("Joint");
     registerComponent<Renderable>("Renderable");
     registerComponent<CullBounds>("CullBounds");
     registerComponent<Light>("Light");

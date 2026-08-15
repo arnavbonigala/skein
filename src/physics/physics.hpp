@@ -148,6 +148,8 @@ private:
     void solveBounds(size_t begin, size_t end, float invDt);
     float boundsReach(size_t i, int axis) const;
     void warmStart(uint32_t begin, uint32_t end);
+    void gatherJoints(Scene& scene);
+    void solveJoints(float invDt, bool replay);
     void buildInertia(JobSystem* jobs);
     Vec3 spin(size_t body, const Vec3& torque) const;
     void applyRestitution(uint32_t begin, uint32_t end);
@@ -186,6 +188,24 @@ private:
     std::vector<uint32_t> kind_;
     std::vector<float> sleepTimer_;
     std::vector<uint8_t> asleep_;
+
+    /// Distance joints, gathered into body indices once a step. Separate from
+    /// contacts because they are never discovered and never go away: the same
+    /// joint is solved every step until something deletes it.
+    std::vector<uint32_t> jointA_;
+    std::vector<uint32_t> jointB_;
+    std::vector<Vec3> jointAnchorA_;
+    std::vector<Vec3> jointAnchorB_;
+    std::vector<float> jointLength_;
+    std::vector<float> jointCompliance_;
+    /// Accumulated impulse per joint, carried between frames so a hanging
+    /// chain starts each step already holding its own weight.
+    /// ponytail: indexed by position in the pool rather than keyed by the pair,
+    /// so it is dropped whenever the joint count changes. Key it like the
+    /// contact cache if joints start being created and destroyed mid-scene.
+    std::vector<float> jointImpulse_;
+    /// Body index of each gathered collider, for resolving a joint's other end.
+    std::vector<uint32_t> slot_;
 
     std::vector<float> reach_;
     std::vector<int32_t> bodyLo_;

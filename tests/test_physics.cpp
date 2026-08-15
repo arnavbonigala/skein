@@ -944,3 +944,112 @@ TEST(a_field_of_turned_columns_is_still_standing_after_ten_seconds) {
         CHECK(rotate(t.rotation, Vec3{0, 1, 0}).y > 0.95f);
     }
 }
+
+namespace {
+
+Entity spawnJointed(Scene& s, Vec3 pos, float radius, float invMass, Entity other, float length) {
+    Entity e = spawnSphere(s, pos, Vec3{0, 0, 0}, radius, invMass);
+    if (other != NULL_ENTITY) {
+        Joint j;
+        j.other = other;
+        j.length = length;
+        s.world.add<Joint>(e, j);
+    }
+    return e;
+}
+
+}  // namespace
+
+TEST(a_chain_of_joints_hangs_from_its_anchor_without_stretching) {
+    Scene scene;
+    PhysicsWorld physics;
+    physics.settings.useBounds = false;
+    physics.settings.allowSleep = false;
+
+    // Ten links below a pinned anchor. Gravity pulls on every one of them, so
+    // the topmost joint carries nine times the load of the bottom one: a solver
+    // that does not carry its impulse between frames stretches the top of a
+    // chain like this and never catches up.
+    const float link = 1.0f;
+    Entity anchor = spawnSphere(scene, Vec3{0, 10.0f, 0}, Vec3{0, 0, 0}, 0.2f, 0.0f);
+    std::vector<Entity> chain;
+    Entity previous = anchor;
+    for (int i = 0; i < 10; ++i) {
+        previous = spawnJointed(scene, Vec3{0, 10.0f - static_cast<float>(i + 1) * link, 0}, 0.2f, 1.0f, previous,
+                                link);
+        chain.push_back(previous);
+    }
+
+    for (int f = 0; f < 300; ++f) physics.step(scene, 1.0f / 60.0f, nullptr);
+
+    for (size_t i = 0; i < chain.size(); ++i) {
+        const Vec3 p = scene.world.get<Transform>(chain[i]).position;
+        const float want = 10.0f - static_cast<float>(i + 1) * link;
+        CHECK(std::abs(p.y - want) < 0.05f);
+        CHECK(std::abs(p.x) < 0.05f);
+    }
+}
+
+TEST(a_joint_pulls_a_body_back_and_a_static_anchor_does_not_move) {
+    Scene scene;
+    PhysicsWorld physics;
+    physics.settings.useBounds = false;
+    physics.settings.allowSleep = false;
+    physics.settings.gravity = Vec3{0, 0, 0};
+
+    Entity anchor = spawnSphere(scene, Vec3{0, 0, 0}, Vec3{0, 0, 0}, 0.2f, 0.0f);
+    Entity ball = spawnJointed(scene, Vec3{2.0f, 0, 0}, 0.2f, 1.0f, anchor, 2.0f);
+    scene.world.get<Velocity>(ball).linear = Vec3{20.0f, 0, 0};
+
+    for (int f = 0; f < 120; ++f) physics.step(scene, 1.0f / 60.0f, nullptr);
+
+    const Vec3 p = scene.world.get<Transform>(ball).position;
+    CHECK_NEAR(length(p), 2.0, 0.05);
+    CHECK_NEAR(scene.world.get<Transform>(anchor).position.x, 0.0, 1e-4);
+}
+
+TEST(a_compliant_joint_stretches_under_load_and_a_rigid_one_does_not) {
+    auto hang = [](float compliance) {
+        Scene scene;
+        PhysicsWorld physics;
+        physics.settings.useBounds = false;
+        physics.settings.allowSleep = false;
+        Entity anchor = spawnSphere(scene, Vec3{0, 5.0f, 0}, Vec3{0, 0, 0}, 0.2f, 0.0f);
+        Entity ball = spawnSphere(scene, Vec3{0, 4.0f, 0}, Vec3{0, 0, 0}, 0.2f, 1.0f);
+        Joint j;
+        j.other = anchor;
+        j.length = 1.0f;
+        j.compliance = compliance;
+        scene.world.add<Joint>(ball, j);
+        for (int f = 0; f < 240; ++f) physics.step(scene, 1.0f / 60.0f, nullptr);
+        return 5.0f - scene.world.get<Transform>(ball).position.y;
+    };
+    const float rigid = hang(0.0f);
+    const float soft = hang(0.002f);
+    CHECK_NEAR(rigid, 1.0, 0.02);
+    CHECK(soft > rigid + 0.05f);
+}
+
+TEST(a_jointed_pair_sleeps_together_and_wakes_together) {
+    Scene scene;
+    PhysicsWorld physics;
+    physics.settings.gravity = Vec3{0, 0, 0};
+    physics.settings.useBounds = false;
+
+    Entity anchor = spawnSphere(scene, Vec3{0, 0, 0}, Vec3{0, 0, 0}, 0.2f, 0.0f);
+    Entity a = spawnJointed(scene, Vec3{2.0f, 0, 0}, 0.2f, 1.0f, anchor, 2.0f);
+    Entity b = spawnJointed(scene, Vec3{4.0f, 0, 0}, 0.2f, 1.0f, a, 2.0f);
+
+    for (int f = 0; f < 180; ++f) physics.step(scene, 1.0f / 60.0f, nullptr);
+    CHECK(scene.world.get<Collider>(a).asleep == 1u);
+    CHECK(scene.world.get<Collider>(b).asleep == 1u);
+
+    // Shoving the far end has to wake the near one too, or the joint is solved
+    // against a body that never integrates the result.
+    scene.world.get<Velocity>(b).linear = Vec3{0, 6.0f, 0};
+    scene.world.get<Collider>(b).asleep = 0;
+    for (int f = 0; f < 30; ++f) physics.step(scene, 1.0f / 60.0f, nullptr);
+    CHECK(scene.world.get<Collider>(a).asleep == 0u);
+    CHECK(length(scene.world.get<Transform>(b).position - Vec3{4.0f, 0, 0}) > 0.1f);
+    CHECK_NEAR(length(scene.world.get<Transform>(b).position - scene.world.get<Transform>(a).position), 2.0, 0.1);
+}

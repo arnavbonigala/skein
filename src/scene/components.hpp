@@ -39,6 +39,22 @@ struct Collider {
     uint32_t asleep = 0;
 };
 
+/// Holds two bodies a fixed distance apart, measured between an anchor point
+/// on each. A length of zero pins them together, which is how a chain of them
+/// becomes a rope and a ring of them becomes a ragdoll. Both entities need a
+/// Collider; the joint lives on the first of them.
+struct Joint {
+    Entity other = NULL_ENTITY;
+    /// Where the joint attaches, in each body's own space.
+    Vec3 anchorA{0, 0, 0};
+    Vec3 anchorB{0, 0, 0};
+    float length = 1.0f;
+    /// Metres of stretch per newton-second of load. Zero is rigid; a small
+    /// value gives a rope that sags under weight rather than one the solver
+    /// has to be retuned to hold.
+    float compliance = 0.0f;
+};
+
 struct Renderable {
     uint32_t mesh = 0;
     uint32_t material = 0;
