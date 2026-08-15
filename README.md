@@ -258,14 +258,14 @@ compare like for like:
 
 | Entities | Build | ECS iterate | Hierarchy | Cull flat | Cull clustered |
 |---|---|---|---|---|---|
-| 25,000 | 3.4 ms | 0.147 ms | 0.098 ms | 0.103 ms | 0.100 ms (1.03x) |
-| 100,000 | 12.2 ms | 0.201 ms | 0.355 ms | 0.327 ms | 0.259 ms (1.26x) |
-| 250,000 | 30.6 ms | 0.521 ms | 0.991 ms | 0.843 ms | 0.537 ms (1.57x) |
-| 500,000 | 62.3 ms | 1.100 ms | 2.576 ms | 2.014 ms | 1.349 ms (1.49x) |
-| 1,000,000 | 134.0 ms | 2.166 ms | 5.739 ms | 4.439 ms | 2.380 ms (1.86x) |
+| 25,000 | 3.6 ms | 0.126 ms | 0.115 ms | 0.137 ms | 0.108 ms (1.26x) |
+| 100,000 | 12.1 ms | 0.224 ms | 0.342 ms | 0.325 ms | 0.279 ms (1.17x) |
+| 250,000 | 31.6 ms | 0.511 ms | 0.997 ms | 0.851 ms | 0.553 ms (1.54x) |
+| 500,000 | 62.2 ms | 1.106 ms | 2.296 ms | 1.944 ms | 1.228 ms (1.58x) |
+| 1,000,000 | 139.8 ms | 2.147 ms | 5.427 ms | 4.773 ms | 2.926 ms (1.63x) |
 
 At a million entities the ECS integrate pass is 2.1 ns per entity and 433,333
-renderables cull and batch in 2.4 ms, with the clustered and flat paths
+renderables cull and batch in 2.9 ms, with the clustered and flat paths
 agreeing on the visible set at every size.
 
 ### What warm starting buys a stack
