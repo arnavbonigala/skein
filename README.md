@@ -107,6 +107,15 @@ building an index array, so the eight sweeps a step read a stride instead of a
 gather — worth 9% of the whole step, since each contact touched five more arrays
 at the same scattered index.
 
+The other half of that problem is the bodies, and it cannot be sorted away: a
+contact reaches two of them at indices the contact list does not control, and no
+ordering makes both contiguous. So the bodies moved to the solver instead of the
+solver moving to them. Velocity, angular velocity, inverse mass, inverse inertia
+and the six numbers of the world inverse-inertia tensor now sit in one 64-byte
+`SolverBody` record — exactly one cache line, asserted at compile time — where
+they were five arrays touched at the same scattered index. Two lines pulled per
+contact instead of ten, over eight sweeps of ~96,000 contacts.
+
 **Physics** — SoA gather/scatter around a hashed uniform grid built with a
 counting sort, a cell-run scan that verifies real cell coordinates to reject
 hash collisions, and a warm-started sequential-impulse solver: each contact

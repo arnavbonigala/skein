@@ -157,31 +157,41 @@ private:
     void updateSleep(float dt, JobSystem* jobs);
     void scatter(Scene& scene, JobSystem* jobs);
 
+    /// Everything an impulse needs about one body, in one 64-byte record. The
+    /// solver reads two of these per contact at indices the contact list does
+    /// not control, so five arrays at the same scattered index cost five cache
+    /// lines where this costs one.
+    struct SolverBody {
+        Vec3 v;
+        float invMass;
+        Vec3 w;
+        /// Mean of the world tensor's diagonal, which answers "does this turn
+        /// at all" for the places that do not need the tensor itself.
+        float invInertia;
+        /// The world-space inverse inertia as the six numbers of a symmetric
+        /// matrix (xx, yy, zz, xy, xz, yz).
+        float iiw[6];
+        float pad[2];
+    };
+    static_assert(sizeof(SolverBody) == 64);
+
     std::vector<Entity> entity_;
     std::vector<Vec3> position_;
-    std::vector<Vec3> velocity_;
-    std::vector<Vec3> angular_;
+    std::vector<SolverBody> body_;
     std::vector<Quat> orientation_;
     /// World-space box axes, three per body, and whether the body is a box
     /// turned far enough for them to differ from the world axes.
     std::vector<Vec3> axis_;
     std::vector<uint8_t> rotated_;
-    /// The mean of the real tensor's diagonal, which answers "how freely does
-    /// this turn at all" for the places that only need to know whether it
-    /// turns. The tensor itself is `invInertiaWorld_`.
-    std::vector<float> invInertia_;
     std::vector<Vec3> pseudo_;
     /// How far each body has moved and turned since the contacts were found,
     /// which is what turns a fixed contact list into a live one.
     std::vector<Quat> spinDelta_;
-    /// Inverse inertia about the body's own axes, and the same tensor turned
-    /// into the world as six numbers of a symmetric matrix
-    /// (xx, yy, zz, xy, xz, yz).
+    /// Inverse inertia about the body's own axes. `SolverBody::iiw` is the
+    /// same tensor turned into the world.
     std::vector<Vec3> invInertiaLocal_;
-    std::vector<float> invInertiaWorld_;
     std::vector<Vec3> halfExtent_;
     std::vector<float> radius_;
-    std::vector<float> invMass_;
     std::vector<float> restitution_;
     std::vector<float> friction_;
     std::vector<uint32_t> kind_;
