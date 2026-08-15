@@ -200,6 +200,27 @@ sphere test already rejects everything:
 | Inside the field, looking down | 92.9% | 0.335 ms | 0.309 ms (1.08x) |
 | Far back, whole field in view | 100.0% | 0.368 ms | 0.261 ms (1.41x) |
 
+### What the layout is actually worth
+
+The same integrate over 200,000 objects, three ways: one polymorphic object per
+entity reached through a shuffled pointer array (the classic scene graph), the
+same objects stored contiguously and called directly, and loose component
+arrays the way the ECS stores them.
+
+| | Time | Per object | |
+|---|---|---|---|
+| Virtual call, pointer per object | 4.958 ms | 24.8 ns | 184 B/object |
+| Contiguous objects, direct call | 1.340 ms | 6.7 ns | **3.70x** |
+| Component arrays | 1.352 ms | 6.8 ns | **3.67x** |
+| Position only, contiguous objects | 0.581 ms | 2.9 ns | |
+| Position only, component arrays | **0.074 ms** | **0.4 ns** | **7.85x** |
+
+Most of the first 3.7x is dispatch and pointer chasing, not layout — with the
+whole object touched, contiguous AoS keeps up with component arrays because the
+quaternion math dominates. Layout only separates them when a pass touches part
+of an object: reading two fields walks 9.9 MB out of component arrays instead of
+dragging 35.1 MB of cache lines, and that is worth 7.9x.
+
 ### Scaling to a million entities
 
 `skein_bench --sweep` rebuilds the world at five sizes with density held

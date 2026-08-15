@@ -2,6 +2,8 @@
 #include <cstdarg>
 #include <cstdio>
 #include <cstring>
+#include <memory>
+#include <random>
 #include <cmath>
 #include <string>
 #include <tuple>
@@ -79,6 +81,50 @@ Mat4 benchViewProj() {
     return perspective(radians(65.0f), 16.0f / 9.0f, 0.2f, 600.0f) *
            lookAt(Vec3{0, 22, 120}, Vec3{0, 6, 0}, Vec3{0, 1, 0});
 }
+
+/// The classic scene-graph shape the ECS is being compared against: one
+/// polymorphic object per entity, allocated individually and visited through a
+/// pointer array.
+struct SceneNode {
+    virtual ~SceneNode() = default;
+    virtual void update(float dt) = 0;
+    Vec3 position;
+    Quat rotation;
+    Vec3 scale{1, 1, 1};
+    Vec3 linear;
+    Vec3 angular;
+    Mat4 world;
+    char name[32] = {};
+    uint32_t mesh = 0;
+    uint32_t material = 0;
+    bool visible = true;
+};
+
+struct MovingNode final : SceneNode {
+    void update(float dt) override {
+        position += linear * dt;
+        if (length2(angular) > 0.0f) rotation = normalize(Quat::axisAngle(angular, length(angular) * dt) * rotation);
+    }
+};
+
+/// Same fields, same work, but stored contiguously and called directly.
+struct FlatNode {
+    Vec3 position;
+    Quat rotation;
+    Vec3 scale{1, 1, 1};
+    Vec3 linear;
+    Vec3 angular;
+    Mat4 world;
+    char name[32] = {};
+    uint32_t mesh = 0;
+    uint32_t material = 0;
+    bool visible = true;
+
+    void update(float dt) {
+        position += linear * dt;
+        if (length2(angular) > 0.0f) rotation = normalize(Quat::axisAngle(angular, length(angular) * dt) * rotation);
+    }
+};
 
 }  // namespace
 
@@ -281,6 +327,83 @@ int main(int argc, char** argv) {
         row("per-entity callbacks", luaTime.median,
             format("%zu scripts, ", scriptedCount) + perEntity(luaTime.median, scriptedCount));
         fact("lua heap", bytes(scripted.script.memoryBytes()));
+    }
+
+    heading("memory layout: ecs pools vs an object graph");
+    {
+        const size_t layoutCount = 200000;
+        std::mt19937 rng(9001);
+        std::uniform_real_distribution<float> u(-1.0f, 1.0f);
+
+        std::vector<Vec3> pos(layoutCount), lin(layoutCount), ang(layoutCount);
+        std::vector<Quat> rot(layoutCount);
+        for (size_t i = 0; i < layoutCount; ++i) {
+            pos[i] = Vec3{u(rng) * 100, u(rng) * 100, u(rng) * 100};
+            lin[i] = Vec3{u(rng), u(rng), u(rng)};
+            ang[i] = Vec3{u(rng) * 0.5f, u(rng) * 0.5f, u(rng) * 0.5f};
+            rot[i] = Quat::euler(u(rng), u(rng), u(rng));
+        }
+
+        std::vector<FlatNode> flat(layoutCount);
+        std::vector<std::unique_ptr<SceneNode>> owned;
+        std::vector<SceneNode*> nodes(layoutCount);
+        owned.reserve(layoutCount);
+        for (size_t i = 0; i < layoutCount; ++i) {
+            flat[i].position = pos[i]; flat[i].rotation = rot[i];
+            flat[i].linear = lin[i]; flat[i].angular = ang[i];
+            auto node = std::make_unique<MovingNode>();
+            node->position = pos[i]; node->rotation = rot[i];
+            node->linear = lin[i]; node->angular = ang[i];
+            nodes[i] = node.get();
+            owned.push_back(std::move(node));
+        }
+        // Long-lived scenes do not keep their allocations in creation order, so
+        // shuffling the pointer array is the honest version of this comparison.
+        std::shuffle(nodes.begin(), nodes.end(), rng);
+
+        std::vector<Vec3> soaPos = pos, soaLin = lin, soaAng = ang;
+        std::vector<Quat> soaRot = rot;
+
+        Timing virtualTime = measure(2, iterations, [&] {
+            for (SceneNode* n : nodes) n->update(1.0f / 60.0f);
+        });
+        Timing flatTime = measure(2, iterations, [&] {
+            for (FlatNode& n : flat) n.update(1.0f / 60.0f);
+        });
+        Timing soaTime = measure(2, iterations, [&] {
+            const float dt = 1.0f / 60.0f;
+            for (size_t i = 0; i < layoutCount; ++i) {
+                soaPos[i] += soaLin[i] * dt;
+                if (length2(soaAng[i]) > 0.0f)
+                    soaRot[i] = normalize(Quat::axisAngle(soaAng[i], length(soaAng[i]) * dt) * soaRot[i]);
+            }
+        });
+
+        row("virtual call, pointer per object", virtualTime.median,
+            perEntity(virtualTime.median, layoutCount) + format("  %zu B/object", sizeof(MovingNode)));
+        row("contiguous objects, direct call", flatTime.median,
+            perEntity(flatTime.median, layoutCount) + format("  %zu B/object, ", sizeof(FlatNode)) +
+                speedup(virtualTime.median, flatTime.median));
+        row("component arrays (what skein does)", soaTime.median,
+            perEntity(soaTime.median, layoutCount) +
+                format("  %zu B touched, ", sizeof(Vec3) * 3 + sizeof(Quat)) +
+                speedup(virtualTime.median, soaTime.median));
+        // Touching two fields instead of all of them is where the layouts
+        // actually diverge: the object walk still drags whole cache lines.
+        Timing flatPos = measure(2, iterations, [&] {
+            const float dt = 1.0f / 60.0f;
+            for (FlatNode& n : flat) n.position += n.linear * dt;
+        });
+        Timing soaPosTime = measure(2, iterations, [&] {
+            const float dt = 1.0f / 60.0f;
+            for (size_t i = 0; i < layoutCount; ++i) soaPos[i] += soaLin[i] * dt;
+        });
+        row("position only, contiguous objects", flatPos.median, perEntity(flatPos.median, layoutCount));
+        row("position only, component arrays", soaPosTime.median,
+            perEntity(soaPosTime.median, layoutCount) + "  " + speedup(flatPos.median, soaPosTime.median));
+        fact("bytes walked per pass",
+             format("%s vs %s", bytes(layoutCount * sizeof(MovingNode)).c_str(),
+                    bytes(layoutCount * (sizeof(Vec3) * 3 + sizeof(Quat))).c_str()));
     }
 
     heading("scaling sweep (density held constant, job system)");
