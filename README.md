@@ -247,8 +247,10 @@ unknown or size-mismatched pools are skipped rather than treated as fatal.
 move, reparent, light and collide entities through the same component pools the
 C++ systems read, so a scripted entity is culled, lit and simulated exactly
 like a native one, and `skein.raycast` queries the same physics grid the
-solver uses. Per-entity callbacks are held in the registry; a callback
-that errors is unbound and reported instead of killing the frame.
+solver uses. `skein.joint` and `skein.unjoint` tie and cut bodies, so a rope or
+a ragdoll is a scripted construction rather than a scene-file one. Per-entity
+callbacks are held in the registry; a callback that errors is unbound and
+reported instead of killing the frame.
 
 ## Measurements
 

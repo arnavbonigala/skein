@@ -341,7 +341,39 @@ int l_overlapSphere(lua_State* L) {
     return 1;
 }
 
+/// skein.joint(a, b, {length=, compliance=, anchor_a={x,y,z}, anchor_b={...}})
+/// Ties two existing bodies together. The joint lives on `a`; joining `a` to
+/// something else means a second entity, since one entity carries one joint.
+int l_joint(lua_State* L) {
+    Scene* scene = host(L).scene();
+    if (!scene) return 0;
+    Entity a = checkEntity(L, 1), b = checkEntity(L, 2);
+    if (a == b || !scene->world.alive(a) || !scene->world.alive(b)) return 0;
+    Joint j;
+    j.other = b;
+    if (lua_istable(L, 3)) {
+        j.length = optNumberField(L, 3, "length", j.length);
+        j.compliance = optNumberField(L, 3, "compliance", j.compliance);
+        j.anchorA = optVec3Field(L, 3, "anchor_a", j.anchorA);
+        j.anchorB = optVec3Field(L, 3, "anchor_b", j.anchorB);
+    }
+    if (scene->world.has<Joint>(a))
+        scene->world.get<Joint>(a) = j;
+    else
+        scene->world.add<Joint>(a, j);
+    return 0;
+}
+
+int l_unjoint(lua_State* L) {
+    Scene* scene = host(L).scene();
+    Entity a = checkEntity(L, 1);
+    if (scene && scene->world.has<Joint>(a)) scene->world.remove<Joint>(a);
+    return 0;
+}
+
 const luaL_Reg API[] = {
+    {"joint", l_joint},
+    {"unjoint", l_unjoint},
     {"spawn", l_spawn},
     {"destroy", l_destroy},
     {"alive", l_alive},

@@ -253,3 +253,31 @@ TEST(lua_overlap_sphere_lists_nearby_bodies) {
     CHECK_EQ(static_cast<int>(lua_tointeger(L, -1)), 0);
     lua_pop(L, 1);
 }
+
+TEST(lua_can_hang_a_rope_and_then_cut_it) {
+    Harness h;
+    h.physics.settings.useBounds = false;
+    h.physics.settings.allowSleep = false;
+    h.run(R"(
+        links = {}
+        previous = skein.spawn{position = {0, 10, 0}, collider = {radius = 0.2, inv_mass = 0}}
+        for i = 1, 6 do
+            local e = skein.spawn{position = {0, 10 - i, 0}, collider = {radius = 0.2}}
+            skein.joint(e, previous, {length = 1.0})
+            links[i] = e
+            previous = e
+        end
+    )");
+    for (int f = 0; f < 240; ++f) h.physics.step(h.scene, 1.0f / 60.0f, nullptr);
+
+    lua_State* L = h.script.state();
+    lua_getglobal(L, "links");
+    lua_rawgeti(L, -1, 6);
+    Entity bottom = static_cast<Entity>(lua_tointeger(L, -1));
+    lua_pop(L, 2);
+    CHECK(std::abs(h.scene.world.get<Transform>(bottom).position.y - 4.0f) < 0.05f);
+
+    h.run("skein.unjoint(links[4])");
+    for (int f = 0; f < 60; ++f) h.physics.step(h.scene, 1.0f / 60.0f, nullptr);
+    CHECK(h.scene.world.get<Transform>(bottom).position.y < 3.0f);
+}
