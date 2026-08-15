@@ -196,6 +196,47 @@ int main(int argc, char** argv) {
                     allPairs / std::max<double>(static_cast<double>(ps.pairsTested), 1.0), allPairs));
     }
 
+    heading("sleeping bodies");
+    {
+        // Each configuration gets its own world: continuing one run from
+        // another's end state would compare two different piles.
+        auto settleRun = [&](const DemoConfig& base, int steps, bool allowSleep) {
+            Demo d;
+            d.build(base, &jobs);
+            d.physics.settings.allowSleep = allowSleep;
+            for (int i = 0; i < steps; ++i) d.physics.step(d.scene, 1.0f / 60.0f, &jobs);
+            Timing t = measure(2, 12, [&] { d.physics.step(d.scene, 1.0f / 60.0f, &jobs); });
+            return std::make_pair(t.median, d.physics.stats());
+        };
+
+        DemoConfig calm = config;
+        calm.runScripts = false;
+        calm.entityCount = 8000;
+        calm.renderableCount = 0;
+        calm.colliderCount = 8000;
+        calm.hierarchyChildren = 0;
+        calm.fieldExtent = 45.0f;
+        calm.fieldHeight = 25.0f;
+
+        auto [calmOn, calmOnStats] = settleRun(calm, 2400, true);
+        auto [calmOff, calmOffStats] = settleRun(calm, 2400, false);
+        row("8k bodies, 40 s to settle, sleeping off", calmOff,
+            format("%u awake, %u contacts", calmOffStats.awake, calmOffStats.contacts));
+        row("8k bodies, 40 s to settle, sleeping on", calmOn,
+            format("%u of %u awake, %u contacts, ", calmOnStats.awake, calmOnStats.bodies, calmOnStats.contacts) +
+                speedup(calmOff, calmOn));
+
+        DemoConfig churn = config;
+        churn.runScripts = false;
+        auto [churnOn, churnOnStats] = settleRun(churn, 600, true);
+        auto [churnOff, churnOffStats] = settleRun(churn, 600, false);
+        row("30k body pile, still churning, off", churnOff,
+            format("%u awake, %u contacts", churnOffStats.awake, churnOffStats.contacts));
+        row("30k body pile, still churning, on", churnOn,
+            format("%u of %u awake, %u contacts, ", churnOnStats.awake, churnOnStats.bodies, churnOnStats.contacts) +
+                speedup(churnOff, churnOn));
+    }
+
     heading("frustum culling and batching");
     demo.scene.updateTransforms(&jobs);
     Frustum frustum = extractFrustum(benchViewProj());

@@ -262,3 +262,79 @@ TEST(coloured_solver_matches_between_one_thread_and_many) {
         CHECK(a.data[i].position.z == b.data[i].position.z);
     }
 }
+
+TEST(a_settled_pile_falls_asleep_and_a_moving_body_wakes_it) {
+    Scene scene;
+    PhysicsWorld world;
+    world.settings.boundsMin = Vec3{-6, 0, -6};
+    world.settings.boundsMax = Vec3{6, 40, 6};
+    world.settings.restitutionFloor = 0.0f;
+
+    std::mt19937 rng(31337);
+    std::uniform_real_distribution<float> u(-4.0f, 4.0f);
+    std::vector<Entity> bodies;
+    for (int i = 0; i < 400; ++i) {
+        Entity e = spawnSphere(scene, Vec3{u(rng), 1.0f + static_cast<float>(i) * 0.05f, u(rng)}, Vec3{0, 0, 0}, 0.5f);
+        scene.world.tryGet<Collider>(e)->restitution = 0.0f;
+        bodies.push_back(e);
+    }
+
+    for (int i = 0; i < 1200; ++i) world.step(scene, 1.0f / 60.0f);
+    const PhysicsStats& settled = world.stats();
+    CHECK(settled.awake * 4 < settled.bodies);
+
+    std::vector<Vec3> before;
+    for (Entity e : bodies) before.push_back(scene.world.tryGet<Transform>(e)->position);
+    world.step(scene, 1.0f / 60.0f);
+    double drift = 0;
+    for (size_t i = 0; i < bodies.size(); ++i)
+        drift += length(scene.world.tryGet<Transform>(bodies[i])->position - before[i]);
+    // A sleeping pile is not merely slow, it is still.
+    CHECK(drift / static_cast<double>(bodies.size()) < 0.002);
+
+    Entity bullet = spawnSphere(scene, Vec3{0, 30, 0}, Vec3{0, -60, 0}, 0.5f);
+    uint32_t sleepingBefore = world.stats().bodies - world.stats().awake;
+    for (int i = 0; i < 40; ++i) world.step(scene, 1.0f / 60.0f);
+    uint32_t sleepingAfter = world.stats().bodies - world.stats().awake;
+    CHECK(sleepingAfter < sleepingBefore);
+    CHECK(scene.world.tryGet<Transform>(bullet)->position.y < 25.0f);
+}
+
+TEST(a_sleeping_pile_is_no_more_interpenetrated_than_an_awake_one) {
+    // Freezing a body is only sound if it was resting somewhere legal. Deep
+    // overlaps are the failure mode: once two overlapping bodies both sleep,
+    // nothing is left to push them apart.
+    const float radius = 0.5f;
+    auto settle = [&](bool allowSleep) {
+        Scene scene;
+        PhysicsWorld world;
+        world.settings.allowSleep = allowSleep;
+        world.settings.boundsMin = Vec3{-6, 0, -6};
+        world.settings.boundsMax = Vec3{6, 40, 6};
+        world.settings.restitutionFloor = 0.0f;
+        std::mt19937 rng(4242);
+        std::uniform_real_distribution<float> u(-4.0f, 4.0f);
+        std::vector<Entity> bodies;
+        for (int i = 0; i < 300; ++i) {
+            Entity e =
+                spawnSphere(scene, Vec3{u(rng), 1.0f + static_cast<float>(i) * 0.06f, u(rng)}, Vec3{0, 0, 0}, radius);
+            scene.world.tryGet<Collider>(e)->restitution = 0.0f;
+            bodies.push_back(e);
+        }
+        for (int i = 0; i < 1400; ++i) world.step(scene, 1.0f / 60.0f);
+        std::vector<Vec3> pos;
+        for (Entity e : bodies) pos.push_back(scene.world.tryGet<Transform>(e)->position);
+        float worst = 0;
+        for (size_t i = 0; i < pos.size(); ++i) {
+            CHECK(pos[i].y >= radius - 0.05f);
+            for (size_t j = i + 1; j < pos.size(); ++j)
+                worst = std::max(worst, 2.0f * radius - length(pos[j] - pos[i]));
+        }
+        return std::make_pair(worst, world.stats().awake);
+    };
+    auto [sleepingOverlap, sleepingAwake] = settle(true);
+    auto [awakeOverlap, awakeCount] = settle(false);
+    CHECK(sleepingAwake * 4 < 300u);
+    CHECK_EQ(awakeCount, 300u);
+    CHECK(sleepingOverlap <= awakeOverlap + 0.02f);
+}

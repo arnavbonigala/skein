@@ -33,6 +33,10 @@ struct Collider {
     uint32_t kind = static_cast<uint32_t>(ColliderKind::Sphere);
     float invMass = 1.0f;
     float restitution = 0.5f;
+    /// How long the body has been slow enough to be a sleep candidate, and
+    /// whether it has crossed the threshold. The physics world owns both.
+    float sleepTimer = 0.0f;
+    uint32_t asleep = 0;
 };
 
 struct Renderable {
