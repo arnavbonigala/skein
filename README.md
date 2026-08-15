@@ -268,7 +268,7 @@ renderable**, 30,000 rigid bodies piled densely enough to generate ~105,000
 contacts a step, 25 lights, 6 meshes, 6 materials, 31.8 MB resident. The
 interactive demo also hangs 24 ropes of ten jointed spheres above the pile and
 runs `assets/scripts/demo.lua` on top, which adds 316
-scripted entities — 112,341 entities and 37,316 renderables in the render
+scripted entities — 112,605 entities and 37,580 renderables in the render
 table below.
 
 ### ECS and simulation, single threaded vs the job system
