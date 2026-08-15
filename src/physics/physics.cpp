@@ -597,6 +597,9 @@ void PhysicsWorld::solveBounds(size_t begin, size_t end, float invDt) {
                     vt = mag <= budget ? 0.0f : vt - std::copysign(budget, vt);
                 }
             }
+            // Being buried in a wall counts the same as being buried in
+            // another body: it has to block sleep, or the body freezes there.
+            deepest_[i] = std::max(deepest_[i], depth);
             float target = std::min(std::max(depth - kSlop, 0.0f) * kCorrection * invDt, kMaxSeparation);
             float& pn = pseudo_[i][axis];
             if (pn * sign < target) pn = target * sign;

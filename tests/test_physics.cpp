@@ -357,6 +357,9 @@ TEST(a_sleeping_pile_is_no_more_interpenetrated_than_an_awake_one) {
         float worst = 0;
         for (size_t i = 0; i < pos.size(); ++i) {
             CHECK(pos[i].y >= radius - 0.05f);
+            // A body may not fall asleep buried in a wall either.
+            CHECK(std::abs(pos[i].x) <= 6.0f - radius + 0.05f);
+            CHECK(std::abs(pos[i].z) <= 6.0f - radius + 0.05f);
             for (size_t j = i + 1; j < pos.size(); ++j)
                 worst = std::max(worst, 2.0f * radius - length(pos[j] - pos[i]));
         }
