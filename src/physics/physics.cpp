@@ -18,6 +18,8 @@ constexpr float kSlop = 0.005f;
 constexpr float kCorrection = 0.2f;
 constexpr float kMaxSeparation = 2.0f;
 /// Overlap a sleeping body refuses to tolerate.
+// ponytail: absolute, not relative to body size; scale it by radius if scenes
+// ever mix boulders with pebbles.
 constexpr float kWakeDepth = 0.05f;
 namespace {
 
