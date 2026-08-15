@@ -15,7 +15,7 @@ namespace skein {
 constexpr float kSlop = 0.005f;
 /// Fraction of the remaining overlap the positional pass removes per iteration,
 /// and the speed that push is allowed to reach.
-constexpr float kCorrection = 0.2f;
+constexpr float kCorrection = 0.35f;
 constexpr float kMaxSeparation = 2.0f;
 /// Overlap a sleeping body refuses to tolerate.
 // ponytail: absolute, not relative to body size; scale it by radius if scenes
