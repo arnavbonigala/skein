@@ -31,7 +31,7 @@ Requires CMake 3.20, a C++20 compiler, Lua and (for the interactive demo) GLFW.
 brew install cmake lua glfw
 cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
 cmake --build build -j
-./build/skein_tests     # 72 tests
+./build/skein_tests     # 73 tests
 ./build/skein_bench     # headless CPU benchmark
 ./build/skein_bench --sweep   # plus the 25k to 1M scaling sweep
 ./build/skein_demo      # interactive window
@@ -109,13 +109,16 @@ sinks through itself and the depth push papers over the result. Reusing last
 frame's impulse converges the same column in two iterations that otherwise
 needed thirty-two, which in turn is what lets a pile go still enough to sleep.
 
-A fixed step also misses whatever crosses a collider between two tests, so the
-step splits itself: each gather records the fastest body and the thinnest
-half-extent in the world, and the inner pipeline runs as many times as it takes
-for nothing to move further than the two thinnest bodies could hide behind,
-capped by `maxSubsteps` (4 by default, 1 to disable). The bound is global
-because the grid and the contact list are, and it costs nothing on a scene where
-nothing is fast — the benchmark field never triggers a split.
+A discrete contact test misses whatever crosses a collider between two tests.
+Rather than splitting the step until nothing moves that far, a moving body is
+widened in the broadphase by the part of its motion its own extent does not
+already cover, and a contact found across the remaining gap carries a negative
+depth that the solver treats as a bound on approach instead of an overlap to
+push out — so the body lands on the surface rather than inside it or past it.
+See [Fast bodies against a thin wall](#fast-bodies-against-a-thin-wall). The
+step still splits itself, capped by `maxSubsteps` (4 by default, 1 to disable),
+but only for motion past a whole grid cell in one step, where widening one body
+would smear it across the grid.
 
 Bodies are linear only: spheres and axis-aligned boxes, no angular velocity and
 no rotated box collisions. Friction therefore acts as sliding friction on a
@@ -343,16 +346,32 @@ is a deep column the positional pass only unwinds one contact per iteration.
 400 spheres of radius 0.15 fired at 20 to 220 m/s at a 0.5 m thick static slab,
 which at the top speed is 3.7 m of travel in a 1/60 s step:
 
-| Substep cap | Step cost | Passed through |
-|---|---|---|
-| 1 (splitting off) | 0.026 ms | 292 of 400 |
-| 4 (the default) | 0.197 ms | 85 of 400 |
-| 16 | 0.079 ms | **0 of 400** |
+| Contact test | Substep cap | Step cost | Passed through |
+|---|---|---|---|
+| discrete | 1 | 0.029 ms | 292 of 400 |
+| discrete | 4 | 0.183 ms | 85 of 400 |
+| discrete | 16 | 0.078 ms | **0 of 400** |
+| speculative | 1 | 0.068 ms | **0 of 400** |
+| speculative | 4 (the default) | 0.062 ms | **0 of 400** |
 
-The tightest cap is not the slowest: a shot that stops at the wall stops needing
-splits, while every shot that escapes keeps moving fast enough to split every
-later step. Nothing in the 30,000-body benchmark field moves fast enough to
-split at all, so the default costs it nothing.
+A discrete test has to split the step sixteen ways to catch every shot.
+Speculative contacts catch all of them without splitting it at all: a moving
+body is registered in the broadphase as wide as the part of its motion its own
+extent does not already cover, so a pair that will meet during the step is
+already sharing a cell when the scan runs, and the contact found across the gap
+carries a *negative* depth the solver reads as a bound on how far the pair may
+approach rather than an overlap to push apart. The shot lands on the surface
+instead of inside it or past it.
+
+The widening is what keeps this free: a body slower than its own radius per step
+is not widened at all, so the 30,000-body benchmark field tests 1% *fewer* pairs
+with speculative contacts on than with them off. Splitting is still there for
+motion past a whole grid cell in one step, where the inflation would smear one
+body across the grid.
+
+The tightest discrete cap is not the slowest, either: a shot that stops at the
+wall stops needing splits, while every shot that escapes keeps moving fast
+enough to split every later step.
 
 ### Culling and broadphase effectiveness
 
@@ -413,7 +432,7 @@ objects drop out, `O` pauses, `P` dumps the frame profile, `V` toggles vsync,
 
 ## Tests
 
-72 tests, no framework. They cover the parts where being wrong is quiet: the
+73 tests, no framework. They cover the parts where being wrong is quiet: the
 hashed grid must return exactly the brute-force contact set even when collider
 sizes vary 70x, the coloured parallel solver must land bitwise on the serial
 result, a stack of eight spheres must still be standing after ten seconds, a
