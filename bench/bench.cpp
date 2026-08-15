@@ -98,6 +98,15 @@ void row(const char* label, double ms, const std::string& note = {}) {
     std::printf("  %-38s %9.3f ms   %s\n", label, ms, note.c_str());
 }
 
+/// A row that also reports the work the pass cost, in core-milliseconds. Wall
+/// time on a loaded machine is mostly a measurement of the load; the core-ms
+/// figure is the same work whatever else the machine is doing, so it is what
+/// two builds should be compared by.
+void row(const char* label, const Timing& t, const std::string& note = {}) {
+    std::printf("  %-38s %9.3f ms   %s%s%.3f core-ms\n", label, t.median, note.c_str(),
+                note.empty() ? "" : ", ", t.cpu);
+}
+
 /// Same column layout as `row` but for facts that are not a duration.
 void fact(const char* label, const std::string& note) {
     std::printf("  %-38s %9s      %s\n", label, "", note.c_str());
@@ -226,22 +235,22 @@ int main(int argc, char** argv) {
     heading("ecs iteration (position + rotation integrate)");
     Timing ecsSerial = measure(3, iterations, [&] { demo.stepKinematics(1.0f / 60.0f, nullptr); });
     Timing ecsParallel = measure(3, iterations, [&] { demo.stepKinematics(1.0f / 60.0f, &jobs); });
-    row("single threaded", ecsSerial.median, perEntity(ecsSerial.median, kinematicCount));
-    row("job system", ecsParallel.median,
+    row("single threaded", ecsSerial, perEntity(ecsSerial.median, kinematicCount));
+    row("job system", ecsParallel,
         perEntity(ecsParallel.median, kinematicCount) + "  " + speedup(ecsSerial.median, ecsParallel.median));
 
     heading("transform hierarchy");
     Timing xformSerial = measure(3, iterations, [&] { demo.scene.updateTransforms(nullptr); });
     Timing xformParallel = measure(3, iterations, [&] { demo.scene.updateTransforms(&jobs); });
-    row("single threaded", xformSerial.median, perEntity(xformSerial.median, entities));
-    row("job system", xformParallel.median,
+    row("single threaded", xformSerial, perEntity(xformSerial.median, entities));
+    row("job system", xformParallel,
         perEntity(xformParallel.median, entities) + "  " + speedup(xformSerial.median, xformParallel.median));
 
     heading("physics step");
     Timing physicsSerial = measure(3, iterations / 2, [&] { demo.physics.step(demo.scene, 1.0f / 60.0f, nullptr); });
     Timing physicsParallel = measure(3, iterations / 2, [&] { demo.physics.step(demo.scene, 1.0f / 60.0f, &jobs); });
     const PhysicsStats& ps = demo.physics.stats();
-    row("single threaded", physicsSerial.median, perEntity(physicsSerial.median, ps.bodies));
+    row("single threaded", physicsSerial, perEntity(physicsSerial.median, ps.bodies));
     row("job system", physicsParallel.median,
         perEntity(physicsParallel.median, ps.bodies) + "  " + speedup(physicsSerial.median, physicsParallel.median));
     // Wall time on a contended machine is a measurement of the contention. The
@@ -759,8 +768,8 @@ int main(int argc, char** argv) {
     Timing cullParallel = measure(3, iterations, [&] { culler.build(demo.scene, frustum, 6, list, &jobs, true); });
     Timing cullOff = measure(3, iterations, [&] { culler.build(demo.scene, frustum, 6, list, &jobs, false); });
 
-    row("cull + batch, single threaded", cullSerial.median, perEntity(cullSerial.median, candidates));
-    row("cull + batch, job system", cullParallel.median,
+    row("cull + batch, single threaded", cullSerial, perEntity(cullSerial.median, candidates));
+    row("cull + batch, job system", cullParallel,
         perEntity(cullParallel.median, candidates) + "  " + speedup(cullSerial.median, cullParallel.median));
     row("batch only, culling disabled", cullOff.median, format("%u objects submitted", list.visible));
     fact("culling effectiveness", format("%u of %u kept, %.1f%% rejected", visible, candidates,
@@ -771,8 +780,8 @@ int main(int argc, char** argv) {
     heading("full frame update (ecs + physics + hierarchy)");
     Timing frameSerial = measure(3, iterations / 2, [&] { demo.update(1.0f / 60.0f, nullptr); });
     Timing frameParallel = measure(3, iterations / 2, [&] { demo.update(1.0f / 60.0f, &jobs); });
-    row("single threaded", frameSerial.median, format("%.0f fps ceiling", 1000.0 / frameSerial.median));
-    row("job system", frameParallel.median,
+    row("single threaded", frameSerial, format("%.0f fps ceiling", 1000.0 / frameSerial.median));
+    row("job system", frameParallel,
         format("%.0f fps ceiling, ", 1000.0 / frameParallel.median) + speedup(frameSerial.median, frameParallel.median));
     // A median frame time is what a spec sheet quotes; a dropped frame is what
     // a player sees. The spread between the two is the number worth watching.
