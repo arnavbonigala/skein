@@ -89,6 +89,11 @@ void JobSystem::wake(int n) {
 }
 
 bool JobSystem::helpOnce(int self) {
+    // Looking for work means locking this worker's queue and then every other
+    // worker's in turn. Idle threads do that in a tight loop, and eight of them
+    // trading eight cache lines slows down the threads that did find work. One
+    // relaxed load answers for all of it when there is nothing to find.
+    if (pendingTasks_.load(std::memory_order_acquire) == 0) return false;
     Task t;
     if (tryPopLocal(self, t) || trySteal(self, t)) {
         t();
