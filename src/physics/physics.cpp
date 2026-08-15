@@ -21,6 +21,8 @@ constexpr float kMaxSeparation = 2.0f;
 // ponytail: absolute, not relative to body size; scale it by radius if scenes
 // ever mix boulders with pebbles.
 constexpr float kWakeDepth = 0.05f;
+/// How often sleeping bodies are measured against each other again.
+constexpr uint64_t kSleepAudit = 16;
 namespace {
 
 constexpr size_t BUCKET_GRAIN = 2048;
@@ -347,6 +349,7 @@ void PhysicsWorld::findContacts(JobSystem* jobs) {
     // Bodies are registered in every cell they overlap, so an overlapping pair
     // is guaranteed to meet in at least one shared cell. Reporting only from
     // the lowest shared cell keeps each pair unique without a visited set.
+    const bool audit = (frame_ % kSleepAudit) == 0;
     const uint32_t buckets = bucketMask_ + 1;
     const size_t chunks = buckets == 0 ? 0 : (buckets + BUCKET_GRAIN - 1) / BUCKET_GRAIN;
     contactChunks_.resize(chunks);
@@ -362,9 +365,10 @@ void PhysicsWorld::findContacts(JobSystem* jobs) {
                 uint32_t runEnd = runStart + 1;
                 uint32_t awake = entries_[runStart].awake;
                 while (runEnd < to && entries_[runEnd].cell == key) awake += entries_[runEnd++].awake;
-                // A cell where everything is asleep can only produce pairs that
-                // are both asleep, and those are skipped anyway.
-                if (awake == 0) {
+                // A cell where everything is asleep only produces pairs that
+                // are both asleep, and those are skipped except on an audit
+                // frame.
+                if (awake == 0 && !audit) {
                     runStart = runEnd;
                     continue;
                 }
@@ -378,7 +382,28 @@ void PhysicsWorld::findContacts(JobSystem* jobs) {
                         if (dx * dx + dy * dy + dz * dz > cull * cull) continue;
                         ++localNear;
                         const uint32_t i = std::min(ea.body, eb.body), j = std::max(ea.body, eb.body);
-                        if (asleep_[i] && asleep_[j]) continue;
+                        // Two sleepers cannot push each other apart, so an
+                        // overlap that appeared just as the second one fell
+                        // asleep would otherwise be permanent. Every audit
+                        // frame the pair is measured again — but only to wake
+                        // them, since solving a contact for a body the rest of
+                        // the step skips would leave velocity nobody applies.
+                        if (asleep_[i] && asleep_[j]) {
+                            if (!audit) continue;
+                            Contact probe{i, j, Vec3{0, 1, 0}, 0};
+                            if (narrow(i, j, probe) && probe.depth > kWakeDepth) {
+                                // The timer has to go back with the flag: this
+                                // pair contributes no contact this step, so
+                                // nothing else would stop the sleep test at the
+                                // end of the step from putting them straight
+                                // back under.
+                                std::atomic_ref<uint8_t>(asleep_[i]).store(0, std::memory_order_relaxed);
+                                std::atomic_ref<uint8_t>(asleep_[j]).store(0, std::memory_order_relaxed);
+                                sleepTimer_[i] = 0.0f;
+                                sleepTimer_[j] = 0.0f;
+                            }
+                            continue;
+                        }
                         if (key != packCell(std::max(bodyLo_[i * 3], bodyLo_[j * 3]),
                                             std::max(bodyLo_[i * 3 + 1], bodyLo_[j * 3 + 1]),
                                             std::max(bodyLo_[i * 3 + 2], bodyLo_[j * 3 + 2]))) {
@@ -784,6 +809,7 @@ void PhysicsWorld::scatter(Scene& scene, JobSystem* jobs) {
 
 PhysicsStats PhysicsWorld::step(Scene& scene, float dt, JobSystem* jobs) {
     SKEIN_PROFILE("physics/step");
+    ++frame_;
     gather(scene);
     stats_.bodies = static_cast<uint32_t>(position_.size());
     if (position_.empty()) {

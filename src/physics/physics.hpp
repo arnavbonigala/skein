@@ -141,6 +141,7 @@ private:
     std::vector<uint32_t> colorOrder_;
     uint32_t bucketMask_ = 0;
     uint32_t colorCount_ = 0;
+    uint64_t frame_ = 0;
     float cell_ = 2.0f;
     float maxReach_ = 0.0f;
     float minThin_ = 0.0f;
