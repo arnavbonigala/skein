@@ -64,8 +64,15 @@ TEST(work_reaches_more_than_one_thread) {
     CHECK_EQ(js.workerCount(), 4);
     std::atomic<size_t> distinct{0};
     std::vector<std::thread::id> ids(256);
+    // Each chunk has to take long enough for a worker to wake and claim one:
+    // chunks are handed out on demand, so an instant body is finished by the
+    // calling thread alone before anyone else gets there.
     js.parallelFor(256, 1, [&](size_t begin, size_t end) {
-        for (size_t i = begin; i < end; ++i) ids[i] = std::this_thread::get_id();
+        for (size_t i = begin; i < end; ++i) {
+            volatile double spin = 0;
+            for (int k = 0; k < 20000; ++k) spin += k;
+            ids[i] = std::this_thread::get_id();
+        }
     });
     std::vector<std::thread::id> unique(ids);
     std::sort(unique.begin(), unique.end());

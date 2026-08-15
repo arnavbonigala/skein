@@ -120,19 +120,42 @@ void JobSystem::parallelFor(size_t count, size_t grain, const std::function<void
         return;
     }
 
-    std::atomic<size_t> remaining{chunks};
-    int self = tlsWorkerId;
-    for (size_t c = 0; c < chunks; ++c) {
-        size_t begin = c * grain;
-        size_t end = std::min(begin + grain, count);
-        submit(-1, [&body, &remaining, begin, end] {
-            body(begin, end);
-            remaining.fetch_sub(1, std::memory_order_release);
-        });
-    }
-    wake(static_cast<int>(std::min<size_t>(chunks, static_cast<size_t>(n))));
+    // One task per chunk means one heap-allocated std::function and one queue
+    // lock per chunk, which is most of the cost of a short parallel pass. The
+    // chunks are handed out through an atomic cursor instead, so the queue only
+    // ever sees one task per worker and the hand-out still balances itself.
+    // `remaining` counts drains still running, not chunks left, so a worker
+    // never touches this stack frame after the count it is waited on reaches
+    // zero.
+    struct Range {
+        const std::function<void(size_t, size_t)>& body;
+        std::atomic<size_t> cursor{0};
+        std::atomic<size_t> remaining{0};
+        size_t count = 0, grain = 0, chunks = 0;
 
-    while (remaining.load(std::memory_order_acquire) != 0) {
+        void drain() {
+            for (;;) {
+                size_t c = cursor.fetch_add(1, std::memory_order_relaxed);
+                if (c >= chunks) break;
+                size_t begin = c * grain;
+                body(begin, std::min(begin + grain, count));
+            }
+            remaining.fetch_sub(1, std::memory_order_release);
+        }
+    };
+    Range range{body};
+    range.count = count;
+    range.grain = grain;
+    range.chunks = chunks;
+
+    int self = tlsWorkerId;
+    size_t helpers = std::min<size_t>(chunks - 1, static_cast<size_t>(n));
+    range.remaining.store(helpers + 1, std::memory_order_relaxed);
+    for (size_t i = 0; i < helpers; ++i) submit(-1, [&range] { range.drain(); });
+    wake(static_cast<int>(helpers));
+    range.drain();
+
+    while (range.remaining.load(std::memory_order_acquire) != 0) {
         if (!helpOnce(self)) std::this_thread::yield();
     }
 }
