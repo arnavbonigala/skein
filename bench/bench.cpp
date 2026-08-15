@@ -2,7 +2,9 @@
 #include <cstdarg>
 #include <cstdio>
 #include <cstring>
+#include <cmath>
 #include <string>
+#include <tuple>
 #include <thread>
 #include <vector>
 
@@ -84,11 +86,13 @@ int main(int argc, char** argv) {
     DemoConfig config;
     config.runScripts = false;
     int iterations = 40;
+    bool runSweep = false;
     for (int i = 1; i < argc; ++i) {
         if (std::strcmp(argv[i], "--entities") == 0 && i + 1 < argc) config.entityCount = std::atoi(argv[++i]);
         else if (std::strcmp(argv[i], "--renderables") == 0 && i + 1 < argc) config.renderableCount = std::atoi(argv[++i]);
         else if (std::strcmp(argv[i], "--colliders") == 0 && i + 1 < argc) config.colliderCount = std::atoi(argv[++i]);
         else if (std::strcmp(argv[i], "--iterations") == 0 && i + 1 < argc) iterations = std::atoi(argv[++i]);
+        else if (std::strcmp(argv[i], "--sweep") == 0) runSweep = true;
     }
 
     const unsigned hw = std::thread::hardware_concurrency();
@@ -277,6 +281,127 @@ int main(int argc, char** argv) {
         row("per-entity callbacks", luaTime.median,
             format("%zu scripts, ", scriptedCount) + perEntity(luaTime.median, scriptedCount));
         fact("lua heap", bytes(scripted.script.memoryBytes()));
+    }
+
+    heading("scaling sweep (density held constant, job system)");
+    if (runSweep) {
+        std::printf("  %-38s %9s   %10s %10s %10s %10s\n", "entities", "build", "ecs", "hierarchy", "cull flat",
+                    "cull morton");
+        for (int count : {25000, 100000, 250000, 500000, 1000000}) {
+            DemoConfig sweep = config;
+            sweep.entityCount = count;
+            sweep.renderableCount = count / 3;
+            sweep.colliderCount = std::min(count / 4, 20000);
+            sweep.hierarchyChildren = count / 10;
+            sweep.pointLights = 8;
+            sweep.runScripts = false;
+            // Density is what culling and the broadphase actually respond to,
+            // so the field grows with the cube root of the population.
+            sweep.fieldExtent = 200.0f * std::cbrt(static_cast<float>(count) / 100000.0f);
+            sweep.fieldHeight = 90.0f * std::cbrt(static_cast<float>(count) / 100000.0f);
+
+            Demo d;
+            Clock::time_point t0 = Clock::now();
+            d.build(sweep, &jobs);
+            double build = millisSince(t0);
+
+            const int reps = count >= 500000 ? 6 : 12;
+            Timing ecs = measure(2, reps, [&] { d.stepKinematics(1.0f / 60.0f, &jobs); });
+            Timing xf = measure(2, reps, [&] { d.scene.updateTransforms(&jobs); });
+
+            Mat4 sweepVp = perspective(radians(65.0f), 16.0f / 9.0f, 0.2f, 600.0f) *
+                           lookAt(Vec3{0, sweep.fieldHeight * 0.25f, sweep.fieldExtent * 0.6f}, Vec3{0, 0, 0},
+                                  Vec3{0, 1, 0});
+            Frustum sweepFrustum = extractFrustum(sweepVp);
+
+            CullSystem flat;
+            flat.useClusters = false;
+            RenderList flatList;
+            Timing flatT = measure(2, reps, [&] { flat.build(d.scene, sweepFrustum, 6, flatList, &jobs, true); });
+
+            CullSystem morton;
+            morton.sortSpatially(d.scene);
+            RenderList mortonList;
+            Timing mortonT = measure(2, reps, [&] { morton.build(d.scene, sweepFrustum, 6, mortonList, &jobs, true); });
+
+            std::printf("  %-38s %8.1fms %9.3fms %9.3fms %9.3fms %9.3fms  %s, %u/%u visible\n",
+                        format("%d", count).c_str(), build, ecs.median, xf.median, flatT.median, mortonT.median,
+                        speedup(flatT.median, mortonT.median).c_str(), mortonList.visible, mortonList.totalCandidates);
+            if (mortonList.visible != flatList.visible) std::printf("  MISMATCH at %d entities\n", count);
+        }
+    } else {
+        fact("skipped", "pass --sweep to run the 25k to 1M scaling sweep");
+    }
+
+    heading("cull cost across camera coverage");
+    {
+        CullSystem flat;
+        flat.useClusters = false;
+        CullSystem morton;
+        morton.sortSpatially(demo.scene);
+        RenderList flatList, mortonList;
+        std::printf("  %-38s %9s %11s %9s %8s\n", "camera", "flat", "morton", "speedup", "visible");
+        struct Shot {
+            const char* label;
+            Vec3 eye;
+            Vec3 at;
+            float fov;
+        };
+        const Shot shots[] = {
+            {"tight, looking away", {0, 24, 260}, {0, 24, 600}, 35.0f},
+            {"narrow fov into the field", {0, 24, 220}, {0, 6, 0}, 25.0f},
+            {"default view", {0, 22, 120}, {0, 6, 0}, 65.0f},
+            {"wide fov, centred", {0, 30, 60}, {0, 6, 0}, 100.0f},
+            {"inside the field, looking down", {0, 80, 0}, {0, 0, 0}, 110.0f},
+            {"far back, whole field in view", {0, 120, 520}, {0, 6, 0}, 70.0f},
+        };
+        for (const Shot& shot : shots) {
+            Frustum f = extractFrustum(perspective(radians(shot.fov), 16.0f / 9.0f, 0.2f, 1400.0f) *
+                                       lookAt(shot.eye, shot.at, Vec3{0, 1, 0}));
+            Timing ft = measure(3, iterations, [&] { flat.build(demo.scene, f, 6, flatList, &jobs, true); });
+            Timing mt = measure(3, iterations, [&] { morton.build(demo.scene, f, 6, mortonList, &jobs, true); });
+            std::printf("  %-38s %7.3fms %9.3fms %8s %7.1f%%%s\n", shot.label, ft.median, mt.median,
+                        speedup(ft.median, mt.median).c_str(),
+                        100.0 * mortonList.visible / std::max(mortonList.totalCandidates, 1u),
+                        mortonList.visible == flatList.visible ? "" : "  MISMATCH");
+        }
+    }
+
+    heading("order decay under sustained motion");
+    {
+        Demo moving;
+        DemoConfig mc = config;
+        mc.runScripts = false;
+        moving.build(mc, &jobs);
+
+        // Both runs measure decay every 30 frames; only the maintained one is
+        // allowed to act on it, so the two rows differ in exactly one thing.
+        auto run = [&](bool maintain) {
+            CullSystem c;
+            RenderList l;
+            if (!maintain) c.resortThreshold = 1e9f;
+            c.sortSpatially(moving.scene);
+            std::vector<double> samples;
+            double decay = 1.0;
+            for (int frame = 0; frame < 800; ++frame) {
+                moving.update(1.0f / 60.0f, &jobs);
+                if ((frame % 30) == 0) c.maintain(moving.scene);
+                Clock::time_point t0 = Clock::now();
+                c.build(moving.scene, frustum, 6, l, &jobs, true);
+                samples.push_back(millisSince(t0));
+                decay = c.spreadBaseline() > 0 ? c.clusterSpread() / c.spreadBaseline() : 1.0;
+            }
+            std::sort(samples.begin(), samples.end());
+            return std::make_tuple(samples[samples.size() / 2], decay, c.stats().sorts, c.stats().objectsTested);
+        };
+
+        auto [staleMs, staleDecay, staleSorts, staleTested] = run(false);
+        auto [freshMs, freshDecay, freshSorts, freshTested] = run(true);
+        row("sorted once, 800 frames of motion", staleMs,
+            format("decay %.2fx, %u sorts, %u objects tested", staleDecay, staleSorts, staleTested));
+        row("maintained every 30 frames", freshMs,
+            format("decay %.2fx, %u sorts, %u objects tested, ", freshDecay, freshSorts, freshTested) +
+                speedup(staleMs, freshMs));
     }
 
     heading("memory");
