@@ -126,14 +126,12 @@ private:
         /// Which point of a multi-point manifold this is, so two contacts
         /// between the same pair keep separate cached impulses.
         uint32_t id;
-        /// Where the pair touches, in world space. Only read when the angular
-        /// solver is on, but computing it is a few adds inside a test that has
-        /// already found everything it needs.
-        Vec3 point;
-        /// The same touching point as an arm from each body's centre, taken
-        /// when the pair was found. Turned by whatever the body has turned
-        /// since, these follow the surface through the substeps instead of
-        /// staying where the narrowphase left them.
+        /// Where the pair touches, as an arm from each body's centre at the
+        /// moment it was found. The narrowphase writes the world-space point
+        /// into `anchorA` and both arms are derived from it once the pair is
+        /// kept, so the point itself never reaches the solver. Turned by
+        /// whatever each body has turned since, the arms follow the surface
+        /// through the substeps instead of staying where they were left.
         Vec3 anchorA, anchorB;
     };
 

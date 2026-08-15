@@ -771,7 +771,7 @@ void PhysicsWorld::findContacts(JobSystem* jobs) {
             float dist = std::sqrt(dist2);
             out.normal = d / dist;
             out.depth = rsum - dist;
-            out.point = position_[i] + out.normal * (radius_[i] - 0.5f * out.depth);
+            out.anchorA = position_[i] + out.normal * (radius_[i] - 0.5f * out.depth);
             return 1;
         }
         if (boxA && boxB) {
@@ -787,7 +787,7 @@ void PhysicsWorld::findContacts(JobSystem* jobs) {
                 const Vec3* axb = rotated_[j] ? &axis_[j * 3] : world;
                 int axisIndex = -1;
                 if (!satBoxes(position_[i], axa, halfExtent_[i], position_[j], axb, halfExtent_[j], margin,
-                              out.normal, out.depth, out.point, axisIndex))
+                              out.normal, out.depth, out.anchorA, axisIndex))
                     return 0;
                 if (axisIndex < 0 || axisIndex >= 6) return 1;
                 // The axis that separated them names the face doing the
@@ -811,7 +811,7 @@ void PhysicsWorld::findContacts(JobSystem* jobs) {
                     manifold[k].normal = out.normal;
                     manifold[k].depth = depths[k];
                     manifold[k].id = ids[k] | (refIsA ? 1u << 14 : 0u);
-                    manifold[k].point = points[k];
+                    manifold[k].anchorA = points[k];
                 }
                 return count;
             }
@@ -846,7 +846,7 @@ void PhysicsWorld::findContacts(JobSystem* jobs) {
                     p[u] = cu ? hi[u] : lo[u];
                     p[v] = cv ? hi[v] : lo[v];
                     manifold[count] = out;
-                    manifold[count].point = p;
+                    manifold[count].anchorA = p;
                     manifold[count].id = static_cast<uint32_t>(1 + cu * 2 + cv);
                     ++count;
                 }
@@ -889,7 +889,7 @@ void PhysicsWorld::findContacts(JobSystem* jobs) {
             out.normal = -nrm;
         }
         out.depth = depth;
-        out.point = contactPoint;
+        out.anchorA = contactPoint;
         return 1;
     };
 
@@ -938,7 +938,7 @@ void PhysicsWorld::findContacts(JobSystem* jobs) {
                         if (asleep_[i] && asleep_[j]) {
                             if (!audit) continue;
                             Contact probe[4];
-                            probe[0] = Contact{i, j, Vec3{0, 1, 0}, 0, 0, Vec3{0, 0, 0}, Vec3{0, 0, 0}, Vec3{0, 0, 0}};
+                            probe[0] = Contact{i, j, Vec3{0, 1, 0}, 0, 0, Vec3{0, 0, 0}, Vec3{0, 0, 0}};
                             if (narrowAll(i, j, probe, 0.0f) > 0 && probe[0].depth > kSleepDepth) {
                                 // The timer has to go back with the flag: this
                                 // pair contributes no contact this step, so
@@ -959,7 +959,7 @@ void PhysicsWorld::findContacts(JobSystem* jobs) {
                             continue;
                         }
                         Contact manifold[4];
-                        manifold[0] = Contact{i, j, Vec3{0, 1, 0}, 0, 0, Vec3{0, 0, 0}, Vec3{0, 0, 0}, Vec3{0, 0, 0}};
+                        manifold[0] = Contact{i, j, Vec3{0, 1, 0}, 0, 0, Vec3{0, 0, 0}, Vec3{0, 0, 0}};
                         int found = narrowAll(i, j, manifold, motion_[i] + motion_[j] + kManifoldSkin);
                         if (found == 0) continue;
                         const Contact& contact = manifold[0];
@@ -974,8 +974,8 @@ void PhysicsWorld::findContacts(JobSystem* jobs) {
                         if (asleep_[j] && (deep || length2(velocity_[i]) > wakeSpeed2))
                             std::atomic_ref<uint8_t>(asleep_[j]).store(0, std::memory_order_relaxed);
                         for (int m = 0; m < found; ++m) {
-                            manifold[m].anchorA = manifold[m].point - position_[i];
-                            manifold[m].anchorB = manifold[m].point - position_[j];
+                            manifold[m].anchorB = manifold[m].anchorA - position_[j];
+                            manifold[m].anchorA -= position_[i];
                             sink.push_back(manifold[m]);
                         }
                     }
@@ -1227,8 +1227,8 @@ void PhysicsWorld::warmStart(uint32_t begin, uint32_t end) {
         if (invMass_[c.a] > 0.0f) velocity_[c.a] -= impulse * invMass_[c.a];
         if (invMass_[c.b] > 0.0f) velocity_[c.b] += impulse * invMass_[c.b];
         if (!settings.angularContacts) continue;
-        if (invInertia_[c.a] > 0.0f) angular_[c.a] -= spin(c.a, cross(c.point - position_[c.a], impulse));
-        if (invInertia_[c.b] > 0.0f) angular_[c.b] += spin(c.b, cross(c.point - position_[c.b], impulse));
+        if (invInertia_[c.a] > 0.0f) angular_[c.a] -= spin(c.a, cross(c.anchorA, impulse));
+        if (invInertia_[c.b] > 0.0f) angular_[c.b] += spin(c.b, cross(c.anchorB, impulse));
     }
 }
 
@@ -1275,9 +1275,9 @@ void PhysicsWorld::loadCachedImpulses(JobSystem* jobs) {
             // around before it ever arrived; the approach speed is carried
             // forward instead and spent on the frame the two actually meet.
             const Contact& ci = contacts_[i];
-            Vec3 pa = settings.angularContacts ? velocity_[ci.a] + cross(angular_[ci.a], ci.point - position_[ci.a])
+            Vec3 pa = settings.angularContacts ? velocity_[ci.a] + cross(angular_[ci.a], ci.anchorA)
                                                : velocity_[ci.a];
-            Vec3 pb = settings.angularContacts ? velocity_[ci.b] + cross(angular_[ci.b], ci.point - position_[ci.b])
+            Vec3 pb = settings.angularContacts ? velocity_[ci.b] + cross(angular_[ci.b], ci.anchorB)
                                                : velocity_[ci.b];
             float vn = dot(pb - pa, ci.normal);
             float approach = std::max(-vn, foundApproach);
