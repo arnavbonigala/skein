@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <atomic>
 #include <bit>
+#include <type_traits>
 
 #include "core/jobs.hpp"
 #include "core/profiler.hpp"
@@ -733,13 +734,15 @@ PhysicsStats PhysicsWorld::step(Scene& scene, float dt, JobSystem* jobs) {
 }
 
 size_t PhysicsWorld::bytesUsed() const {
-    size_t total = position_.capacity() * sizeof(Vec3) * 3 + entity_.capacity() * sizeof(Entity) +
-                   radius_.capacity() * sizeof(float) * 3 + kind_.capacity() * sizeof(uint32_t) +
-                   (bodyLo_.capacity() + bodyHi_.capacity()) * sizeof(int32_t) +
-                   (entryOffset_.capacity() + entryBucket_.capacity()) * sizeof(uint32_t) +
-                   cellStart_.capacity() * sizeof(uint32_t) +                    contacts_.capacity() * sizeof(Contact) + entries_.capacity() * sizeof(GridEntry) + bodyColorMask_.capacity() * sizeof(uint64_t) +
-                   contactColor_.capacity() * sizeof(uint32_t) + colorOrder_.capacity() * sizeof(uint32_t);
-    for (const auto& c : contactChunks_) total += c.capacity() * sizeof(Contact);
+    auto bytes = [](const auto& v) { return v.capacity() * sizeof(typename std::decay_t<decltype(v)>::value_type); };
+    size_t total = bytes(entity_) + bytes(position_) + bytes(velocity_) + bytes(pseudo_) + bytes(halfExtent_) +
+                   bytes(radius_) + bytes(invMass_) + bytes(restitution_) + bytes(kind_) + bytes(sleepTimer_) +
+                   bytes(asleep_) + bytes(deepest_) + bytes(reach_) + bytes(bodyLo_) + bytes(bodyHi_) +
+                   bytes(entryOffset_) + bytes(entryBucket_) + bytes(cellStart_) + bytes(entries_) +
+                   bytes(contacts_) + bytes(normalImpulse_) + bytes(restitutionBias_) + bytes(contactKey_) +
+                   bytes(cacheKey_) + bytes(cacheImpulse_) + bytes(bodyColorMask_) + bytes(contactColor_) +
+                   bytes(colorStart_) + bytes(colorOrder_);
+    for (const auto& c : contactChunks_) total += bytes(c);
     return total;
 }
 
