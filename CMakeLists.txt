@@ -49,6 +49,28 @@ target_link_libraries(skein PUBLIC ${LUA_LIBRARY})
 find_package(Threads REQUIRED)
 target_link_libraries(skein PUBLIC Threads::Threads)
 
+add_library(skein_app STATIC src/app/demo_scene.cpp src/app/camera.cpp)
+target_link_libraries(skein_app PUBLIC skein)
+target_compile_definitions(skein_app PUBLIC SKEIN_ASSET_DIR="${CMAKE_CURRENT_SOURCE_DIR}/assets")
+
+find_package(glfw3 QUIET)
+if(glfw3_FOUND)
+  find_library(SKEIN_OPENGL OpenGL)
+  add_library(skein_gl STATIC
+    src/render/shader.cpp
+    src/render/gpu_mesh.cpp
+    src/render/renderer.cpp
+    src/render/debug_draw.cpp
+  )
+  target_link_libraries(skein_gl PUBLIC skein_app glfw ${SKEIN_OPENGL})
+  target_compile_definitions(skein_gl PUBLIC GL_SILENCE_DEPRECATION)
+
+  add_executable(skein_demo src/app/main.cpp)
+  target_link_libraries(skein_demo PRIVATE skein_gl)
+else()
+  message(STATUS "glfw3 not found; skipping the interactive skein_demo target")
+endif()
+
 add_executable(skein_tests
   tests/test_main.cpp
   tests/test_math.cpp
