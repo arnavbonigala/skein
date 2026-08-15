@@ -23,6 +23,7 @@ namespace {
 struct Timing {
     double median = 0;
     double best = 0;
+    double p99 = 0;
     double worst = 0;
 };
 
@@ -42,6 +43,7 @@ Timing measure(int warmup, int iterations, Fn&& fn) {
     Timing t;
     t.median = samples[samples.size() / 2];
     t.best = samples.front();
+    t.p99 = samples[static_cast<size_t>(static_cast<double>(samples.size() - 1) * 0.99)];
     t.worst = samples.back();
     return t;
 }
@@ -474,6 +476,14 @@ int main(int argc, char** argv) {
     row("single threaded", frameSerial.median, format("%.0f fps ceiling", 1000.0 / frameSerial.median));
     row("job system", frameParallel.median,
         format("%.0f fps ceiling, ", 1000.0 / frameParallel.median) + speedup(frameSerial.median, frameParallel.median));
+    // A median frame time is what a spec sheet quotes; a dropped frame is what
+    // a player sees. The spread between the two is the number worth watching.
+    fact("spread, single threaded",
+         format("best %.2f ms, p99 %.2f ms, worst %.2f ms (p99 is %.0f%% over median)", frameSerial.best,
+                frameSerial.p99, frameSerial.worst, 100.0 * (frameSerial.p99 / frameSerial.median - 1.0)));
+    fact("spread, job system",
+         format("best %.2f ms, p99 %.2f ms, worst %.2f ms (p99 is %.0f%% over median)", frameParallel.best,
+                frameParallel.p99, frameParallel.worst, 100.0 * (frameParallel.p99 / frameParallel.median - 1.0)));
 
     heading("spatial clustering vs flat culling");
     {
