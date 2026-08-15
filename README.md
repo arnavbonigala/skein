@@ -31,7 +31,7 @@ Requires CMake 3.20, a C++20 compiler, Lua and (for the interactive demo) GLFW.
 brew install cmake lua glfw
 cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
 cmake --build build -j
-./build/skein_tests     # 76 tests
+./build/skein_tests     # 77 tests
 ./build/skein_bench     # headless CPU benchmark
 ./build/skein_bench --sweep   # plus the 25k to 1M scaling sweep
 ./build/skein_demo      # interactive window
@@ -148,7 +148,8 @@ unknown or size-mismatched pools are skipped rather than treated as fatal.
 **Scripting** — Lua 5.5 embedded through the C API. Scripts spawn, destroy,
 move, reparent, light and collide entities through the same component pools the
 C++ systems read, so a scripted entity is culled, lit and simulated exactly
-like a native one. Per-entity callbacks are held in the registry; a callback
+like a native one, and `skein.raycast` queries the same physics grid the
+solver uses. Per-entity callbacks are held in the registry; a callback
 that errors is unbound and reported instead of killing the frame.
 
 ## Measurements
@@ -443,7 +444,7 @@ objects drop out, `O` pauses, `P` dumps the frame profile, `V` toggles vsync,
 
 ## Tests
 
-76 tests, no framework. They cover the parts where being wrong is quiet: the
+77 tests, no framework. They cover the parts where being wrong is quiet: the
 hashed grid must return exactly the brute-force contact set even when collider
 sizes vary 70x, the coloured parallel solver must land bitwise on the serial
 result, a stack of eight spheres must still be standing after ten seconds, a

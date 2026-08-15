@@ -164,7 +164,7 @@ void Demo::build(const DemoConfig& cfg, JobSystem* jobs) {
     // fewer, fatter cells beat more, tighter ones until about here.
     physics.settings.cellSize = 4.0f;
 
-    script.bind(&scene, &assets);
+    script.bind(&scene, &assets, &physics);
     scene.updateTransforms(jobs);
 }
 

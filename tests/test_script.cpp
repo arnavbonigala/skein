@@ -1,3 +1,4 @@
+#include "physics/physics.hpp"
 #include "script/script.hpp"
 #include "test.hpp"
 
@@ -14,6 +15,7 @@ namespace {
 struct Harness {
     Scene scene;
     Assets assets;
+    PhysicsWorld physics;
     ScriptSystem script;
 
     Harness() {
@@ -23,7 +25,7 @@ struct Harness {
         m.name = "red";
         m.albedo = Vec3{1, 0, 0};
         assets.addMaterial(m);
-        script.bind(&scene, &assets);
+        script.bind(&scene, &assets, &physics);
     }
 
     void run(const char* source) {
@@ -191,4 +193,37 @@ TEST(unknown_mesh_names_raise_a_lua_error_without_leaking_entities) {
     CHECK(!h.script.doString("skein.spawn{mesh = 'not_a_mesh'}", "=bad", error));
     CHECK(error.find("not_a_mesh") != std::string::npos);
     CHECK_EQ(h.scene.world.aliveCount(), size_t{0});
+}
+
+TEST(lua_can_raycast_the_world_it_spawned) {
+    Harness h;
+    h.run(R"(
+        target = skein.spawn{position = {0, 0, 12}, collider = {radius = 1.5}}
+    )");
+    h.physics.settings.gravity = Vec3{0, 0, 0};
+    h.physics.settings.useBounds = false;
+    h.physics.step(h.scene, 0.0f, nullptr);
+
+    h.run(R"(
+        hitEntity, distance, nx, ny, nz = skein.raycast(0, 0, 0, 0, 0, 1, 100)
+        missed = skein.raycast(0, 0, 0, 0, 1, 0, 100)
+    )");
+
+    lua_State* L = h.script.state();
+    lua_getglobal(L, "target");
+    Entity spawned = static_cast<Entity>(lua_tointeger(L, -1));
+    lua_pop(L, 1);
+    lua_getglobal(L, "hitEntity");
+    CHECK_EQ(static_cast<uint64_t>(lua_tointeger(L, -1)), static_cast<uint64_t>(spawned));
+    lua_pop(L, 1);
+
+    lua_getglobal(L, "distance");
+    CHECK_NEAR(lua_tonumber(L, -1), 10.5, 1e-3);
+    lua_pop(L, 1);
+    lua_getglobal(L, "nz");
+    CHECK_NEAR(lua_tonumber(L, -1), -1.0, 1e-4);
+    lua_pop(L, 1);
+    lua_getglobal(L, "missed");
+    CHECK(lua_isnil(L, -1));
+    lua_pop(L, 1);
 }

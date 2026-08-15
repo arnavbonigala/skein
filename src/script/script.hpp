@@ -8,6 +8,7 @@ namespace skein {
 
 class Scene;
 class Assets;
+class PhysicsWorld;
 
 /// Lua 5.x host. Scripts see a `skein` table that manipulates entities through
 /// the same component pools the C++ systems use, so a scripted entity is not a
@@ -20,7 +21,8 @@ public:
     ScriptSystem(const ScriptSystem&) = delete;
     ScriptSystem& operator=(const ScriptSystem&) = delete;
 
-    void bind(Scene* scene, Assets* assets);
+    /// `physics` is optional; without it `skein.raycast` reports no hit.
+    void bind(Scene* scene, Assets* assets, PhysicsWorld* physics = nullptr);
 
     bool doString(const std::string& source, const std::string& chunkName, std::string& error);
     bool doFile(const std::string& path, std::string& error);
@@ -39,6 +41,7 @@ public:
     lua_State* state() { return L_; }
     Scene* scene() { return scene_; }
     Assets* assets() { return assets_; }
+    PhysicsWorld* physics() { return physics_; }
     float elapsed() const { return elapsed_; }
 
 private:
@@ -47,6 +50,7 @@ private:
     lua_State* L_ = nullptr;
     Scene* scene_ = nullptr;
     Assets* assets_ = nullptr;
+    PhysicsWorld* physics_ = nullptr;
     std::vector<std::string> errors_;
     float elapsed_ = 0.0f;
 };

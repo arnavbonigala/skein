@@ -4,6 +4,7 @@
 
 #include "assets/mesh.hpp"
 #include "core/profiler.hpp"
+#include "physics/physics.hpp"
 #include "scene/scene.hpp"
 #include "script/script.hpp"
 
@@ -303,6 +304,25 @@ int l_log(lua_State* L) {
     return 0;
 }
 
+/// `skein.raycast(ox, oy, oz, dx, dy, dz [, maxDistance])` -> entity, distance,
+/// nx, ny, nz, or nothing when the ray hits nothing. The query runs against the
+/// grid the last physics step built.
+int l_raycast(lua_State* L) {
+    PhysicsWorld* physics = host(L).physics();
+    if (!physics) return 0;
+    Vec3 origin{static_cast<float>(luaL_checknumber(L, 1)), static_cast<float>(luaL_checknumber(L, 2)),
+                static_cast<float>(luaL_checknumber(L, 3))};
+    Vec3 dir{static_cast<float>(luaL_checknumber(L, 4)), static_cast<float>(luaL_checknumber(L, 5)),
+             static_cast<float>(luaL_checknumber(L, 6))};
+    float maxDistance = static_cast<float>(luaL_optnumber(L, 7, 1e6));
+    RayHit hit = physics->raycast(origin, dir, maxDistance);
+    if (!hit.hit) return 0;
+    lua_pushinteger(L, static_cast<lua_Integer>(hit.entity));
+    lua_pushnumber(L, hit.distance);
+    pushVec3(L, hit.normal);
+    return 5;
+}
+
 const luaL_Reg API[] = {
     {"spawn", l_spawn},
     {"destroy", l_destroy},
@@ -321,6 +341,7 @@ const luaL_Reg API[] = {
     {"material", l_materialId},
     {"add_material", l_addMaterial},
     {"on_update", l_onUpdate},
+    {"raycast", l_raycast},
     {"time", l_time},
     {"log", l_log},
     {nullptr, nullptr},
@@ -354,9 +375,10 @@ void ScriptSystem::openApi() {
     lua_setglobal(L_, "skein");
 }
 
-void ScriptSystem::bind(Scene* scene, Assets* assets) {
+void ScriptSystem::bind(Scene* scene, Assets* assets, PhysicsWorld* physics) {
     scene_ = scene;
     assets_ = assets;
+    physics_ = physics;
 }
 
 bool ScriptSystem::doString(const std::string& source, const std::string& chunkName, std::string& error) {
