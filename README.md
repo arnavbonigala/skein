@@ -31,7 +31,7 @@ Requires CMake 3.20, a C++20 compiler, Lua and (for the interactive demo) GLFW.
 brew install cmake lua glfw
 cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
 cmake --build build -j
-./build/skein_tests     # 97 tests
+./build/skein_tests     # 98 tests
 ./build/skein_bench     # headless CPU benchmark
 ./build/skein_bench --sweep   # plus the 25k to 1M scaling sweep
 ./build/skein_demo      # interactive window
@@ -129,7 +129,7 @@ The same grid answers ray queries: `PhysicsWorld::raycast` walks it cell by cell
 and stops as soon as the nearest hit lies inside the cell it is walking, since a
 body is registered in every cell it overlaps and a closer hit would have been
 found in a cell already visited. 4,096 rays into the 30,000-body field cost
-**0.37 µs each** (2.74 M rays/s) against 74.2 µs for testing every body — 203x.
+**0.66 µs each** (1.50 M rays/s) against 93.7 µs for testing every body — 141x.
 A test checks 400 random rays against an O(n) reference. `overlapSphere`
 answers area queries off the same grid, and both are bound into Lua as
 `skein.raycast` and `skein.overlap_sphere`.
@@ -245,12 +245,18 @@ coverage rather than accuracy. That is not enough on its own: the machine behind
 these tables sat at a load average of 11.5, which kept only 796 of 3,606 samples
 and inflates every wall-clock figure below. So each headline row also reports
 **core-milliseconds** — the CPU time the process actually burned, summed over
-its threads. That number is the work rather than the wait, and it is stable
-where wall time is not: across two runs four minutes apart, one starting at load
-3.2 and one at 11.5, the serial physics step measured 102.9 and 100.5 core-ms —
-2% apart — while the *parallel* full frame, which has seven more threads
-competing for whatever cores are left, went from 76.9 ms to 36.0 ms. Treat the
-wall column as an upper bound and the core-ms column as the measurement.
+its threads. It is the more honest of the two, though not an invariant: across
+runs the serial physics step moved between 100 and 125 core-ms, roughly 20%,
+while the parallel full frame's wall time moved between 36 and 119 ms, a factor
+of three. Contention inflates CPU time too — through the cache and the memory
+bus rather than through the scheduler — so core-ms is what to compare two builds
+by *within one session*, back to back, not a number to quote across machines.
+Every A/B in this file was measured that way: alternating old and new binaries
+in one loop, so the drift lands on both.
+
+Treat all of it as an upper bound. The tables come from the one run whose parts
+agree with each other; a run whose thread-scaling table says 32 ms for a frame
+its own full-frame row measured at 119 ms is measuring the machine.
 
 Both harnesses build the same world from `Demo::build`: **112,025 entities**,
 100,000 of them integrating position and rotation every frame, **37,000
@@ -411,20 +417,29 @@ agreeing on the visible set at every size.
 ### What warm starting buys a stack
 
 Thirty-two columns of eight spheres, dropped and left for ten seconds, then
-measured by where the top sphere ended up. A perfect stack puts it at 7.50.
+measured by where the top sphere ended up and by how many columns are still
+columns. A perfect stack puts the top sphere at 7.50.
 
-| Solver iterations | Cold | Warm started |
+| Budget | Cold | Warm started |
 |---|---|---|
-| 2 | 3.76 — 47% of the stack standing | 7.34 — **98%** |
-| 4 | 6.28 — 83% | 7.41 — **99%** |
-| 8 | 7.34 — 98% | 7.43 — **99%** |
-| 16 | 7.43 — 99% | 7.45 — **99%** |
+| 1 substep x 2 iterations | 4.34 — 0 of 32 columns intact | 5.32 — 0 of 32 |
+| 2 substeps x 2 iterations | 6.38 — 0 of 32 | **7.09 — 32 of 32** |
+| 4 substeps x 2 iterations (the default) | 7.45 — 32 of 32 | 7.46 — 32 of 32 |
 
-A cold solver needs eight iterations to reach what warm starting reaches in
-two, because the reaction holding a column up travels one contact per
-iteration. Reusing each contact's accumulated impulse removes that dependency
-on stack height, and it is what makes sleeping possible at all: a pile that
-never converges never goes still enough to sleep.
+The middle row is the result: at the same budget, warm starting is the
+difference between every column standing and none of them. The mean height hides
+that — 6.38 out of 7.50 sounds like a stack leaning, and it is thirty-two stacks
+that came down and piled up — which is why the intact count is reported next to
+it.
+
+The top row is the other half. At one substep the column comes down at two, four,
+eight and sixteen iterations alike; the reaction holding it up travels one
+contact per sweep, and warm starting removes the dependency on *height* but not
+the one on time. An earlier version of this table swept iterations at one substep
+and reported 98% standing, which the engine no longer reproduces at any iteration
+count — the positional pass stopped rotating and rolling resistance stopped
+applying at flat contacts, both of which a column needs, and both of which were
+propping this measurement up rather than the stack.
 
 ### Sleeping
 
@@ -440,8 +455,8 @@ is work, not parallelism:
 
 | Scene | Sleeping off | Sleeping on | |
 |---|---|---|---|
-| 4,000 in a box, 30 s to settle | 1.82 ms — 4,000 awake, 11,725 contacts | **0.24 ms** — 18 awake, 76 contacts | **7.48x** |
-| 30,000 demo field, still churning | 18.35 ms — 30,000 awake | 17.96 ms — 22,626 awake | 1.02x |
+| 4,000 in a box, 30 s to settle | 12.52 ms — 4,000 awake, 10,713 contacts | **0.36 ms** — 0 awake, 0 contacts | **34.9x** |
+| 30,000 demo field, still churning | 107.98 ms — 30,000 awake, 87,833 contacts | 102.85 ms — 25,767 awake, 83,867 contacts | 1.05x |
 
 The second row is the point of the first: a pile that never settles pays only
 the bookkeeping for a feature it cannot use.
@@ -452,18 +467,27 @@ Speed is half of a solver; the other half is how much of the pile is still
 inside itself when the motion stops. 2,000 spheres dropped into a 24 m box and
 left for 20 s, then every one of the 2M pairs checked directly:
 
-| Solver | Step | Worst overlap | Mean overlap | Fastest body |
-|---|---|---|---|---|
-| 1 iteration, warm | 0.57 ms | 25.0% of a radius | 3.6% | 0.196 m/s |
-| 2 iterations, warm | 0.71 ms | 16.9% | 2.3% | 0.185 m/s |
-| 4 iterations, warm | 0.93 ms | 15.2% | 1.7% | **0.144 m/s** |
-| 8 iterations, warm | 1.71 ms | **10.9%** | **1.4%** | 0.162 m/s |
-| 2 iterations, cold | 0.65 ms | **170.0%** | 5.1% | 0.567 m/s |
+| Solver | Worst overlap | Mean overlap | Fastest body |
+|---|---|---|---|
+| 1 iteration, warm | 5.3% of a radius | 1.1% | 0.453 m/s |
+| 2 iterations, warm (the default) | **1.8%** | 0.9% | 0.244 m/s |
+| 4 iterations, warm | 1.3% | 0.8% | 0.404 m/s |
+| 8 iterations, warm | **1.1%** | **0.8%** | **0.174 m/s** |
+| 2 iterations, cold | 2.2% | 0.9% | 0.370 m/s |
 
-The last row is the one that matters: without warm starting, two iterations
-leave a pair fully inside each other and the pile still crawling at half a
-metre a second. Iterations past two buy the worst case back slowly, because it
-is a deep column the positional pass only unwinds one contact per iteration.
+Nothing here is deeply interpenetrated, which was not true before substepping:
+the same table used to report a worst case of 170% of a radius for the cold
+solver — a pair fully inside each other — and 25% for one warm iteration.
+Substeps fixed the worst case rather than the average, which is what they are
+for. What is left is a floor around 1% that iterations buy back very slowly,
+because it is a deep column the positional pass only unwinds one contact per
+iteration.
+
+Warm starting now costs the pile 0.4% of a radius rather than the difference
+between converged and not, because four substeps re-derive the contact geometry
+often enough to do most of that job themselves. It still earns its keep where
+the chain is long — see the hanging ropes below, where it is worth 580x its
+cost.
 
 ### Fast bodies against a thin wall
 
@@ -472,11 +496,11 @@ which at the top speed is 3.7 m of travel in a 1/60 s step:
 
 | Contact test | Substep cap | Step cost | Passed through |
 |---|---|---|---|
-| discrete | 1 | 0.028 ms | 292 of 400 |
-| discrete | 4 | 0.158 ms | 85 of 400 |
-| discrete | 16 | 0.078 ms | **0 of 400** |
-| speculative | 1 | 0.072 ms | **0 of 400** |
-| speculative | 4 (the default) | 0.080 ms | **0 of 400** |
+| discrete | 1 | 0.064 ms | 277 of 400 |
+| discrete | 4 | 1.068 ms | 68 of 400 |
+| discrete | 16 | 0.366 ms | **0 of 400** |
+| speculative | 1 | 0.308 ms | **0 of 400** |
+| speculative | 4 (the default) | 0.143 ms | **0 of 400** |
 
 A discrete test has to split the step sixteen ways to catch every shot.
 Speculative contacts catch all of them without splitting it at all: a moving
@@ -487,11 +511,20 @@ carries a *negative* depth the solver reads as a bound on how far the pair may
 approach rather than an overlap to push apart. The shot lands on the surface
 instead of inside it or past it.
 
-The widening is what keeps this free: a body slower than its own radius per step
-is not widened at all, so the 30,000-body benchmark field tests 1% *fewer* pairs
-with speculative contacts on than with them off. Splitting is still there for
-motion past a whole grid cell in one step, where the inflation would smear one
-body across the grid.
+The widening is what keeps it cheap: a body slower than its own radius per step
+is not widened at all, so the 30,000-body benchmark field tests 3% *fewer* pairs
+with speculative contacts on than with them off, and the whole feature costs
+about 6% of the step. Splitting is still there for motion past a whole grid cell
+in one step, where the inflation would smear one body across the grid.
+
+An earlier version of this table reported 0 of 400 through for every row,
+including the discrete ones. That was not a solver that had stopped needing
+speculation: `speculativeContacts = false` cleared the broadphase widening but
+the narrowphase tolerance was still derived from each body's motion, so a
+"discrete" run went on accepting contacts across the gap the step was about to
+close. The test that would have caught it is the one nobody writes — that a
+bullet *does* go through when everything meant to stop it is switched off — and
+it is in the suite now.
 
 The tightest discrete cap is not the slowest, either: a shot that stops at the
 wall stops needing splits, while every shot that escapes keeps moving fast
@@ -500,21 +533,22 @@ enough to split every later step.
 ### Culling and broadphase effectiveness
 
 37,000 candidates against a 65° frustum: **25,230 kept, 11,770 rejected
-(31.8%)** in 0.35 ms. The broadphase is the same story at a different scale —
-30,000 densely piled bodies produce 1.99M candidate pairs instead of the
-4.5×10⁸ an all-pairs test would need, **226x fewer**. What happens to those
-1.99M is the whole design:
+(31.8%)** in 0.34 ms. The broadphase is the same story at a different scale —
+30,000 densely piled bodies produce 1.88M candidate pairs instead of the
+4.5×10⁸ an all-pairs test would need, **276x fewer**. What happens to those
+1.88M is the whole design:
 
 | Stage | Pairs | Cost of the test |
 |---|---|---|
-| Tested in a shared cell | 1,993,119 | reads only the sorted entry array |
-| Within each other's reach | 257,427 (12.9%) | one distance compare |
-| Not another cell's to report | 106,481 | six ints from the body's cell range |
-| Real contacts | 61,892 | full sphere/box narrowphase |
+| Tested in a shared cell | 1,881,037 | reads only the sorted entry array |
+| Within each other's reach | 248,040 (13.2%) | one distance compare |
+| Not another cell's to report | 106,782 | six ints from the body's cell range |
+| Real contacts | 105,463 | full sphere/box narrowphase |
 
 87% of the work is rejected before touching a body array at all, which is why
 the entry carries its own position and reach instead of an index to look one
-up.
+up. Almost everything that survives all three filters is a real contact, which
+is what a grid sized to the typical body rather than the largest one buys.
 
 ### Rendering, before and after batching
 
@@ -540,10 +574,10 @@ time on top.
 
 | | |
 |---|---|
-| Serialize 112,025 entities | 1.72 ms → 21.3 MB (12.1 GB/s) |
-| Deserialize | 4.24 ms (4.9 GB/s), entity ids preserved exactly |
-| Lua per-entity callbacks | 0.413 ms for 5,000 scripts — 82.7 ns/callback |
-| ECS pools / physics / culling / Lua heap | 28.0 MB / 28.6 MB / 917 KB / 385 KB |
+| Serialize 112,025 entities | 1.69 ms → 21.4 MB (12.3 GB/s) |
+| Deserialize | 4.72 ms (4.4 GB/s), entity ids preserved exactly |
+| Lua per-entity callbacks | 0.394 ms for 5,000 scripts — 78.8 ns/callback |
+| ECS pools / physics / culling / Lua heap | 28.1 MB / 55.0 MB / 917 KB / 385 KB |
 
 ## Demo controls
 
@@ -556,7 +590,7 @@ objects drop out, `O` pauses, `P` dumps the frame profile, `V` toggles vsync,
 
 ## Tests
 
-97 tests, no framework. They cover the parts where being wrong is quiet: the
+98 tests, no framework. They cover the parts where being wrong is quiet: the
 hashed grid must return exactly the brute-force contact set even when collider
 sizes vary 70x, the coloured parallel solver must land bitwise on the serial
 result, a stack of eight spheres must still be standing after ten seconds, a
@@ -570,7 +604,9 @@ eight turned boxes must all still be standing after ten seconds, a slab must tum
 over end at least five times more readily than it spins about its own length,
 a skidding ball must end up rolling and then stop, clustered
 culling must keep exactly the objects the flat path keeps and
-must re-sort only once motion has actually loosened the order, a slab must
+must re-sort only once motion has actually loosened the order, a bullet must go
+through a wall when speculation and substepping are both off and must not when
+either is on, a slab must
 slide furthest on ice, least on rubber and in between on one of each, a chain of joints must hang at its rest length rather than
 stretch or climb and must still do so after being saved and loaded, a
 2,000-entity hierarchy with destroyed parents must survive a serialization
