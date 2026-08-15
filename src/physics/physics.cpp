@@ -93,6 +93,8 @@ void PhysicsWorld::gather(Scene& scene) {
     reach_.resize(n);
 
     maxReach_ = 0.0f;
+    minThin_ = 0.0f;
+    maxSpeed2_ = 0.0f;
     double reachSum = 0.0;
     const float sleepSpeed2 = settings.sleepSpeed * settings.sleepSpeed;
     size_t m = 0;
@@ -124,6 +126,14 @@ void PhysicsWorld::gather(Scene& scene) {
         reach_[m] = reach;
         maxReach_ = std::max(maxReach_, reach);
         reachSum += reach;
+        // Tunneling is bounded by the thinnest dimension in the world, not by
+        // the bounding radius: a wide floor slab is easy to shoot through
+        // exactly where it is thin.
+        float thin = c.kind == static_cast<uint32_t>(ColliderKind::Sphere)
+                         ? radius_[m]
+                         : minComponent(halfExtent_[m]);
+        if (thin > 0.0f) minThin_ = minThin_ == 0.0f ? thin : std::min(minThin_, thin);
+        maxSpeed2_ = std::max(maxSpeed2_, length2(linear));
         ++m;
     }
     if (m != n) {
@@ -772,11 +782,30 @@ PhysicsStats PhysicsWorld::step(Scene& scene, float dt, JobSystem* jobs) {
         stats_.awake = 0;
         return stats_;
     }
-    integrate(dt, jobs);
-    buildGrid(jobs);
-    findContacts(jobs);
-    colorContacts();
-    resolve(dt, jobs);
+    // A body that crosses more than the thinnest collider in the world in one
+    // step can end up on the far side before anything is tested, so the step is
+    // split until nothing moves that far. The count is global because the grid
+    // and the contact list are: substepping one body alone would mean rebuilding
+    // both for a single pair. ponytail: one bullet therefore costs everyone;
+    // a per-island split is the upgrade if a scene mixes the two.
+    uint32_t substeps = 1;
+    if (settings.maxSubsteps > 1 && minThin_ > 0.0f) {
+        // A pair is still caught as long as the mover ends the step inside the
+        // other body's extent, so the bound is the sum of the two thinnest
+        // half-extents in the world, not one of them.
+        float motion = std::sqrt(maxSpeed2_) * dt;
+        substeps = static_cast<uint32_t>(std::ceil(motion / (2.0f * minThin_)));
+        substeps = std::clamp(substeps, 1u, static_cast<uint32_t>(settings.maxSubsteps));
+    }
+    stats_.substeps = substeps;
+    const float h = dt / static_cast<float>(substeps);
+    for (uint32_t s = 0; s < substeps; ++s) {
+        integrate(h, jobs);
+        buildGrid(jobs);
+        findContacts(jobs);
+        colorContacts();
+        resolve(h, jobs);
+    }
     if (settings.allowSleep) updateSleep(dt, jobs);
     else stats_.awake = static_cast<uint32_t>(position_.size());
     scatter(scene, jobs);

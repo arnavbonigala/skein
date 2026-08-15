@@ -22,14 +22,17 @@ struct PhysicsSettings {
     Vec3 boundsMin{-60, 0, -60};
     Vec3 boundsMax{60, 120, 60};
     int solverIterations = 2;
-    /// A body slower than `sleepSpeed` for `sleepTime` seconds stops being
-    /// integrated and solved until something touches it.
+    /// Upper bound on how many times a step may be split when a body would
+    /// otherwise cross a collider between two tests. 1 disables splitting.
+    int maxSubsteps = 4;
     /// Reuse each contact's accumulated impulse next frame. Off is the naive
     /// solver, kept so the benchmark can measure what warm starting buys.
     bool warmStart = true;
     /// Coulomb friction coefficient shared by every contact.
     /// ponytail: global, move onto Collider when materials need to differ.
     float friction = 0.4f;
+    /// A body slower than `sleepSpeed` for `sleepTime` seconds stops being
+    /// integrated and solved until something touches it.
     bool allowSleep = true;
     /// Must sit above gravity * dt, or a body resting on another never falls
     /// below it: gravity re-accelerates it every step and the contact impulse
@@ -53,6 +56,8 @@ struct PhysicsStats {
     float cellSize = 0;
     /// Bodies still being integrated and solved this step.
     uint32_t awake = 0;
+    /// Times the step was split to keep a fast body from crossing a collider.
+    uint32_t substeps = 1;
 };
 
 /// Broadphase is a hashed uniform grid built with a counting sort, so the
@@ -134,6 +139,8 @@ private:
     uint32_t colorCount_ = 0;
     float cell_ = 2.0f;
     float maxReach_ = 0.0f;
+    float minThin_ = 0.0f;
+    float maxSpeed2_ = 0.0f;
     float meanReach_ = 0.0f;
 
     PhysicsStats stats_;

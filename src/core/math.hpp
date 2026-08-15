@@ -65,6 +65,7 @@ inline Vec3 vmax(const Vec3& a, const Vec3& b) { return {std::max(a.x, b.x), std
 inline Vec3 vabs(const Vec3& a) { return {std::fabs(a.x), std::fabs(a.y), std::fabs(a.z)}; }
 inline Vec3 lerp(const Vec3& a, const Vec3& b, float t) { return a + (b - a) * t; }
 inline float maxComponent(const Vec3& v) { return std::max(v.x, std::max(v.y, v.z)); }
+inline float minComponent(const Vec3& v) { return std::min(v.x, std::min(v.y, v.z)); }
 
 inline Vec4 operator+(const Vec4& a, const Vec4& b) { return {a.x + b.x, a.y + b.y, a.z + b.z, a.w + b.w}; }
 inline Vec4 operator*(const Vec4& a, float s) { return {a.x * s, a.y * s, a.z * s, a.w * s}; }
