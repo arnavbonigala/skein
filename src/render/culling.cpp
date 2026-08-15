@@ -13,7 +13,7 @@ constexpr uint32_t MAX_SORT_BUCKETS = 1u << 16;
 }  // namespace
 
 void CullSystem::build(Scene& scene, const Frustum& frustum, uint32_t materialCount, RenderList& out,
-                       JobSystem* jobs) {
+                       JobSystem* jobs, bool applyFrustum) {
     SKEIN_PROFILE("render/cull");
     out.clear();
 
@@ -34,7 +34,7 @@ void CullSystem::build(Scene& scene, const Frustum& frustum, uint32_t materialCo
         for (size_t i = begin; i < end; ++i) {
             if (!renderables.data[i].visible) continue;
             Entity e = renderables.dense[i];
-            const CullBounds* cb = bounds.tryGet(e);
+            const CullBounds* cb = applyFrustum ? bounds.tryGet(e) : nullptr;
             if (cb) {
                 if (!frustumIntersectsSphere(frustum, cb->center, cb->radius)) continue;
                 if (!frustumIntersectsAABB(frustum, cb->center, cb->extent)) continue;

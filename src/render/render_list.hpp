@@ -39,8 +39,10 @@ struct RenderList {
 /// counting sort over the (mesh, material) key so it stays linear.
 class CullSystem {
 public:
+    /// `applyFrustum` exists so the benchmark can measure the same batching
+    /// path with culling switched off.
     void build(Scene& scene, const Frustum& frustum, uint32_t materialCount, RenderList& out,
-               JobSystem* jobs = nullptr);
+               JobSystem* jobs = nullptr, bool applyFrustum = true);
 
     size_t bytesUsed() const;
 
