@@ -196,6 +196,57 @@ int main(int argc, char** argv) {
                     allPairs / std::max<double>(static_cast<double>(ps.pairsTested), 1.0), allPairs));
     }
 
+    heading("stack convergence (32 columns of 8 spheres)");
+    {
+        // A stack is the case a sequential-impulse solver is worst at: the
+        // reaction has to travel one contact per iteration, so a cold solver
+        // needs as many iterations as the stack is tall. Reusing last frame's
+        // impulse removes that dependency.
+        const float radius = 0.5f;
+        auto column = [&](bool warm, int iters) {
+            Scene scene;
+            PhysicsWorld world;
+            world.settings.boundsMin = Vec3{-20, 0, -20};
+            world.settings.boundsMax = Vec3{20, 40, 20};
+            world.settings.restitutionFloor = 0.0f;
+            world.settings.allowSleep = false;
+            world.settings.warmStart = warm;
+            world.settings.solverIterations = iters;
+            std::vector<Entity> tops;
+            for (int c = 0; c < 32; ++c) {
+                float x = static_cast<float>(c % 8) * 3.0f - 12.0f;
+                float z = static_cast<float>(c / 8) * 3.0f - 6.0f;
+                for (int i = 0; i < 8; ++i) {
+                    Transform t;
+                    t.position = Vec3{x, radius + static_cast<float>(i) * 1.02f, z};
+                    Entity e = scene.create(t);
+                    scene.world.add<Velocity>(e, Velocity{});
+                    Collider col;
+                    col.radius = radius;
+                    col.restitution = 0.0f;
+                    scene.world.add<Collider>(e, col);
+                    if (i == 7) tops.push_back(e);
+                }
+            }
+            for (int i = 0; i < 600; ++i) world.step(scene, 1.0f / 60.0f, &jobs);
+            double height = 0;
+            for (Entity e : tops) height += scene.world.tryGet<Transform>(e)->position.y;
+            Timing t = measure(2, 20, [&] { world.step(scene, 1.0f / 60.0f, &jobs); });
+            return std::make_pair(t.median, height / static_cast<double>(tops.size()));
+        };
+        const double ideal = radius + 7.0 * 2.0 * radius;
+        for (int iters : {2, 4, 8, 16}) {
+            auto [coldMs, coldTop] = column(false, iters);
+            auto [warmMs, warmTop] = column(true, iters);
+            row(format("%2d iterations, cold", iters).c_str(), coldMs,
+                format("top sphere at %.2f of %.2f (%.0f%% of the stack standing)", coldTop, ideal,
+                       100.0 * (coldTop - radius) / (ideal - radius)));
+            row(format("%2d iterations, warm started", iters).c_str(), warmMs,
+                format("top sphere at %.2f of %.2f (%.0f%% standing)", warmTop, ideal,
+                       100.0 * (warmTop - radius) / (ideal - radius)));
+        }
+    }
+
     heading("sleeping bodies");
     {
         // Each configuration gets its own world: continuing one run from

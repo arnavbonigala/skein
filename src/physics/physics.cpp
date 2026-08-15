@@ -496,7 +496,7 @@ void PhysicsWorld::loadCachedImpulses(JobSystem* jobs) {
             uint64_t key = contactKey(entity_[contacts_[i].a], entity_[contacts_[i].b]);
             contactKey_[i] = key;
             float found = 0.0f;
-            if (cacheMask_ != 0) {
+            if (settings.warmStart && cacheMask_ != 0) {
                 for (uint32_t slot = static_cast<uint32_t>(key) & cacheMask_;; slot = (slot + 1) & cacheMask_) {
                     if (cacheKey_[slot] == 0) break;
                     if (cacheKey_[slot] == key) {
@@ -582,7 +582,7 @@ void PhysicsWorld::resolve(float dt, JobSystem* jobs) {
     deepest_.assign(position_.size(), 0.0f);
     const float invDt = dt > 1e-6f ? 1.0f / dt : 0.0f;
     loadCachedImpulses(jobs);
-    for (uint32_t color = 0; color <= colorCount_; ++color) {
+    for (uint32_t color = 0; settings.warmStart && color <= colorCount_; ++color) {
         uint32_t begin = colorStart_[color == colorCount_ ? SERIAL_COLOR : color];
         uint32_t end = colorStart_[(color == colorCount_ ? SERIAL_COLOR : color) + 1];
         size_t span = end - begin;
@@ -615,7 +615,7 @@ void PhysicsWorld::resolve(float dt, JobSystem* jobs) {
         solveRange(colorStart_[SERIAL_COLOR], colorStart_[SERIAL_COLOR + 1], positional, invDt);
     }
 
-    storeCachedImpulses();
+    if (settings.warmStart) storeCachedImpulses();
 
     auto applyPseudo = [&](size_t begin, size_t end) {
         // A sleeper stays exactly where it was when it fell asleep; nudging it

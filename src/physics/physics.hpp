@@ -24,6 +24,9 @@ struct PhysicsSettings {
     int solverIterations = 2;
     /// A body slower than `sleepSpeed` for `sleepTime` seconds stops being
     /// integrated and solved until something touches it.
+    /// Reuse each contact's accumulated impulse next frame. Off is the naive
+    /// solver, kept so the benchmark can measure what warm starting buys.
+    bool warmStart = true;
     /// Coulomb friction coefficient shared by every contact.
     /// ponytail: global, move onto Collider when materials need to differ.
     float friction = 0.4f;
