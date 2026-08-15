@@ -86,10 +86,23 @@ per body) and runs each colour in parallel; a test asserts the parallel result
 is bitwise identical to the serial one over 90 steps of a 4,000-body pile.
 
 **Physics** — SoA gather/scatter around a hashed uniform grid built with a
-counting sort, a 27-cell neighbour scan that verifies real cell coordinates to
-reject hash collisions, and a sequential-impulse solver with Baumgarte
-positional correction. A test asserts the grid finds exactly the same contact
-set as an O(n²) reference over 3000 bodies.
+counting sort, a cell-run scan that verifies real cell coordinates to reject
+hash collisions, and a warm-started sequential-impulse solver: each contact
+carries an accumulated normal impulse keyed by entity pair and cached across
+frames, so a resting stack starts every frame already holding itself up. On top
+of that sit Coulomb friction bounded by that accumulated impulse, restitution
+captured as a bias before the first iteration, world bounds solved as a
+constraint rather than clamped afterwards, split-impulse positional correction
+that never feeds real velocity, and body sleeping. A test asserts the grid finds
+exactly the same contact set as an O(n²) reference over 3000 bodies, and another
+that an eight-sphere column still stands after ten seconds.
+
+Warm starting is what makes the rest work. Cancelling each contact's approach
+velocity from scratch every frame cannot hold a stack up — the reaction has to
+travel down the column one contact per iteration, so at two iterations a column
+sinks through itself and the depth push papers over the result. Reusing last
+frame's impulse converges the same column in two iterations that otherwise
+needed thirty-two, which in turn is what lets a pile go still enough to sleep.
 
 **Assets** — a hand-written OBJ parser (all four face index forms, negative
 indices, polygon fan triangulation, vertex welding, generated normals) plus
