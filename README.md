@@ -266,7 +266,8 @@ Both harnesses build the same world from `Demo::build`: **112,025 entities**,
 100,000 of them integrating position and rotation every frame, **37,000
 renderable**, 30,000 rigid bodies piled densely enough to generate ~105,000
 contacts a step, 25 lights, 6 meshes, 6 materials, 31.8 MB resident. The
-interactive demo also runs `assets/scripts/demo.lua` on top, which adds 316
+interactive demo also hangs 24 ropes of ten jointed spheres above the pile and
+runs `assets/scripts/demo.lua` on top, which adds 316
 scripted entities — 112,341 entities and 37,316 renderables in the render
 table below.
 
