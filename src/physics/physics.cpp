@@ -1000,7 +1000,14 @@ void PhysicsWorld::solveRange(uint32_t begin, uint32_t end, bool positional, flo
             applyImpulse(applyT);
         }
 
-        if (angular && total > 0.0f) {
+        // Rolling resistance is what a curved contact needs and what a flat one
+        // does not: a ball rolls because its contact point is stationary, so
+        // sliding friction never reaches it, while a box face is already held
+        // by four points that friction can act at. Spending it on a box face
+        // torques the stack instead of settling it.
+        const bool curved = kind_[c.a] == static_cast<uint32_t>(ColliderKind::Sphere) ||
+                            kind_[c.b] == static_cast<uint32_t>(ColliderKind::Sphere);
+        if (angular && curved && total > 0.0f) {
             Vec3 spin = angular_[c.b] - angular_[c.a];
             float wl = length(spin);
             float iiSum = iiA + iiB;
@@ -1022,20 +1029,18 @@ void PhysicsWorld::solveRange(uint32_t begin, uint32_t end, bool positional, flo
             // separate pseudo velocity that is integrated into position and
             // then dropped, so pushing an overlap out never feeds real motion.
             float target = std::min(std::max(depth - kSlop, 0.0f) * kCorrection * invDt, kMaxSeparation);
-            // The push has to be able to turn the body as well as move it: a box
-            // resting on one deep corner is separated by rotating about the
-            // others, and a solver that can only translate lifts it off them
-            // instead, leaving it tilted for good.
-            Vec3 pa = pseudo_[c.a] + (iiA > 0.0f ? cross(pseudoSpin_[c.a], rA) : Vec3{0, 0, 0});
-            Vec3 pb = pseudo_[c.b] + (iiB > 0.0f ? cross(pseudoSpin_[c.b], rB) : Vec3{0, 0, 0});
+            // The push only moves bodies, it does not turn them. Letting it turn
+            // them separates a box resting on one deep corner faster, but it is
+            // a correction with no momentum behind it, and a column of boxes
+            // fed a few degrees of it per frame leans over and falls.
+            Vec3 pa = pseudo_[c.a];
+            Vec3 pb = pseudo_[c.b];
             float pvn = dot(pb - pa, c.normal);
             float push = (target - pvn) / normalMass;
             if (push > 0.0f) {
                 const Vec3 j = c.normal * push;
                 if (imA > 0.0f) pseudo_[c.a] -= j * imA;
                 if (imB > 0.0f) pseudo_[c.b] += j * imB;
-                if (iiA > 0.0f) pseudoSpin_[c.a] -= cross(rA, j) * iiA;
-                if (iiB > 0.0f) pseudoSpin_[c.b] += cross(rB, j) * iiB;
             }
         }
     }
@@ -1276,7 +1281,6 @@ void PhysicsWorld::applyRestitution(uint32_t begin, uint32_t end) {
 void PhysicsWorld::resolve(float dt, JobSystem* jobs) {
     SKEIN_PROFILE("physics/solve");
     pseudo_.assign(position_.size(), Vec3{0, 0, 0});
-    pseudoSpin_.assign(position_.size(), Vec3{0, 0, 0});
     deepest_.assign(position_.size(), 0.0f);
     spinDelta_.assign(position_.size(), Quat{});
     // ponytail: built once per step rather than once per substep. A body turns
@@ -1307,7 +1311,6 @@ void PhysicsWorld::resolve(float dt, JobSystem* jobs) {
     // the push and a stack of spheres sinks through itself over a few hundred
     // frames.
     auto applyPseudo = [&](float sdt) {
-        const bool angular = settings.angularContacts;
         auto pass = [&](size_t begin, size_t end) {
             for (size_t i = begin; i < end; ++i) {
                 // A sleeper stays exactly where it was when it fell asleep;
@@ -1315,14 +1318,7 @@ void PhysicsWorld::resolve(float dt, JobSystem* jobs) {
                 // nothing to part them.
                 if (asleep_[i]) continue;
                 position_[i] += pseudo_[i] * sdt;
-                if (angular) {
-                    float spin = length(pseudoSpin_[i]);
-                    if (spin > 1e-8f)
-                        orientation_[i] = normalize(
-                            Quat::axisAngle(pseudoSpin_[i] / spin, spin * sdt) * orientation_[i]);
-                }
                 pseudo_[i] = Vec3{0, 0, 0};
-                pseudoSpin_[i] = Vec3{0, 0, 0};
             }
         };
         if (jobs && position_.size() >= 8192)
@@ -1671,7 +1667,7 @@ void PhysicsWorld::overlapSphere(const Vec3& center, float radius, std::vector<E
 
 size_t PhysicsWorld::bytesUsed() const {
     auto bytes = [](const auto& v) { return v.capacity() * sizeof(typename std::decay_t<decltype(v)>::value_type); };
-    size_t total = bytes(pseudoSpin_) + bytes(axis_) + bytes(rotated_) + bytes(entity_) + bytes(position_) + bytes(velocity_) + bytes(angular_) +
+    size_t total = bytes(axis_) + bytes(rotated_) + bytes(entity_) + bytes(position_) + bytes(velocity_) + bytes(angular_) +
                    bytes(orientation_) + bytes(invInertia_) + bytes(tangentImpulse_) + bytes(approach_) +
                    bytes(sweep_) + bytes(pseudo_) + bytes(halfExtent_) +
                    bytes(radius_) + bytes(invMass_) + bytes(restitution_) + bytes(kind_) + bytes(sleepTimer_) +

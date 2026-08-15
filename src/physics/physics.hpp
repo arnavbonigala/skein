@@ -170,7 +170,6 @@ private:
     /// store the diagonal and rotate it if elongated bodies ever matter.
     std::vector<float> invInertia_;
     std::vector<Vec3> pseudo_;
-    std::vector<Vec3> pseudoSpin_;
     /// How far each body has moved and turned since the contacts were found,
     /// which is what turns a fixed contact list into a live one.
     std::vector<Quat> spinDelta_;
