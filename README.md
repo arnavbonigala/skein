@@ -40,6 +40,19 @@ cmake --build build -j
 `skein_demo --capture 200` runs the render-path sweep instead of opening an
 interactive session.
 
+To compare two builds rather than read one, save a run and diff against it:
+
+```sh
+./build/skein_bench --save before.txt
+# change something, rebuild
+./build/skein_bench --compare before.txt
+```
+
+Every timed row grows a `+x% wall +y% work` column. The work column is the one
+to read — see [Measurements](#measurements) for why. Compared against itself on
+a loaded machine the benchmark reports about 3% on the physics step, which is
+the noise floor a real change has to clear.
+
 ## What is in here
 
 **ECS** — sparse-set storage: each component type owns a dense array plus a

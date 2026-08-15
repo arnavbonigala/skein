@@ -92,10 +92,59 @@ Timing measure(int warmup, int iterations, Fn&& fn) {
     return t;
 }
 
-void heading(const char* title) { std::printf("\n\033[1m%s\033[0m\n", title); }
+/// Every timed row, kept so a run can be written out and a later run compared
+/// against it. The label a row prints is its key, so the two runs line up
+/// without either of them knowing the benchmark's structure.
+struct Record {
+    std::string key;
+    double ms;
+    double cpu;
+};
+std::vector<Record> gRecords;
+std::string gHeading;
+/// Rows loaded from a previous run's file, for the delta column.
+std::vector<Record> gBaseline;
+
+const Record* baselineFor(const std::string& key) {
+    for (const Record& r : gBaseline)
+        if (r.key == key) return &r;
+    return nullptr;
+}
+
+void heading(const char* title) {
+    gHeading = title;
+    std::printf("\n\033[1m%s\033[0m\n", title);
+}
+
+void record(const char* label, double ms, double cpu) {
+    std::string key = gHeading + "/" + label;
+    // Trailing padding is part of some labels, and a key that changes when a
+    // column widens compares against nothing.
+    while (!key.empty() && key.back() == ' ') key.pop_back();
+    gRecords.push_back({key, ms, cpu});
+}
+
+/// The delta against the loaded baseline, or empty when there is none. Wall
+/// time and core-ms are both reported: on a loaded machine they disagree, and
+/// which of them moved is the whole question.
+std::string delta(const char* label, double ms, double cpu) {
+    if (gBaseline.empty()) return {};
+    std::string key = gHeading + "/" + label;
+    while (!key.empty() && key.back() == ' ') key.pop_back();
+    const Record* was = baselineFor(key);
+    if (!was) return "   (new)";
+    char buf[64];
+    if (cpu > 0 && was->cpu > 0)
+        std::snprintf(buf, sizeof(buf), "   %+6.1f%% wall %+6.1f%% work", 100.0 * (ms / was->ms - 1.0),
+                      100.0 * (cpu / was->cpu - 1.0));
+    else
+        std::snprintf(buf, sizeof(buf), "   %+6.1f%%", 100.0 * (ms / was->ms - 1.0));
+    return buf;
+}
 
 void row(const char* label, double ms, const std::string& note = {}) {
-    std::printf("  %-38s %9.3f ms   %s\n", label, ms, note.c_str());
+    record(label, ms, 0.0);
+    std::printf("  %-38s %9.3f ms   %s%s\n", label, ms, note.c_str(), delta(label, ms, 0.0).c_str());
 }
 
 /// A row that also reports the work the pass cost, in core-milliseconds. Wall
@@ -103,13 +152,37 @@ void row(const char* label, double ms, const std::string& note = {}) {
 /// figure is the same work whatever else the machine is doing, so it is what
 /// two builds should be compared by.
 void row(const char* label, const Timing& t, const std::string& note = {}) {
-    std::printf("  %-38s %9.3f ms   %s%s%.3f core-ms\n", label, t.median, note.c_str(),
-                note.empty() ? "" : ", ", t.cpu);
+    record(label, t.median, t.cpu);
+    std::printf("  %-38s %9.3f ms   %s%s%.3f core-ms%s\n", label, t.median, note.c_str(),
+                note.empty() ? "" : ", ", t.cpu, delta(label, t.median, t.cpu).c_str());
 }
 
 /// Same column layout as `row` but for facts that are not a duration.
 void fact(const char* label, const std::string& note) {
     std::printf("  %-38s %9s      %s\n", label, "", note.c_str());
+}
+
+/// One record a line: wall, core-ms, then the key. Not JSON, because a
+/// hand-rolled parser for one is more code than the whole feature.
+bool writeRecords(const char* path) {
+    std::FILE* f = std::fopen(path, "w");
+    if (!f) return false;
+    for (const Record& r : gRecords) std::fprintf(f, "%.6f\t%.6f\t%s\n", r.ms, r.cpu, r.key.c_str());
+    std::fclose(f);
+    return true;
+}
+
+bool readRecords(const char* path, std::vector<Record>& out) {
+    std::FILE* f = std::fopen(path, "r");
+    if (!f) return false;
+    char line[512];
+    while (std::fgets(line, sizeof(line), f)) {
+        double ms = 0, cpu = 0;
+        char key[400] = {0};
+        if (std::sscanf(line, "%lf\t%lf\t%399[^\n]", &ms, &cpu, key) == 3) out.push_back({key, ms, cpu});
+    }
+    std::fclose(f);
+    return true;
 }
 
 std::string format(const char* fmt, ...) {
@@ -188,12 +261,18 @@ int main(int argc, char** argv) {
     config.runScripts = false;
     int iterations = 40;
     bool runSweep = false;
+    const char* saveTo = nullptr;
     for (int i = 1; i < argc; ++i) {
         if (std::strcmp(argv[i], "--entities") == 0 && i + 1 < argc) config.entityCount = std::atoi(argv[++i]);
         else if (std::strcmp(argv[i], "--renderables") == 0 && i + 1 < argc) config.renderableCount = std::atoi(argv[++i]);
         else if (std::strcmp(argv[i], "--colliders") == 0 && i + 1 < argc) config.colliderCount = std::atoi(argv[++i]);
         else if (std::strcmp(argv[i], "--iterations") == 0 && i + 1 < argc) iterations = std::atoi(argv[++i]);
         else if (std::strcmp(argv[i], "--sweep") == 0) runSweep = true;
+        else if (std::strcmp(argv[i], "--save") == 0 && i + 1 < argc) saveTo = argv[++i];
+        else if (std::strcmp(argv[i], "--compare") == 0 && i + 1 < argc) {
+            if (!readRecords(argv[++i], gBaseline))
+                std::fprintf(stderr, "[bench] cannot read %s\n", argv[i]);
+        }
     }
 
     const unsigned hw = std::thread::hardware_concurrency();
@@ -1202,6 +1281,13 @@ int main(int argc, char** argv) {
                             "so it is thrown away rather than averaged in");
     fact("if most were dropped", "nothing here was measured on a quiet machine; compare builds by the "
                                  "serial core-ms under \"physics step\", which is the work rather than the wait");
+    if (!gBaseline.empty())
+        fact("comparing", format("%zu rows against a saved run; the work column is the one to read, since the "
+                                 "machine may not be the same one it was",
+                                 gBaseline.size()));
+    if (saveTo)
+        fact("saved", writeRecords(saveTo) ? format("%zu rows to %s", gRecords.size(), saveTo)
+                                           : format("could not write %s", saveTo));
     std::printf("\n");
     return 0;
 }
