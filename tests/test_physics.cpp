@@ -7,6 +7,7 @@
 
 #include "core/jobs.hpp"
 #include "scene/scene.hpp"
+#include "scene/serialize.hpp"
 
 using namespace skein;
 
@@ -988,6 +989,31 @@ TEST(a_chain_of_joints_hangs_from_its_anchor_without_stretching) {
         CHECK(std::abs(p.y - want) < 0.05f);
         CHECK(std::abs(p.x) < 0.05f);
     }
+}
+
+TEST(a_chain_still_hangs_after_being_saved_and_loaded) {
+    Scene scene;
+    const float link = 0.8f;
+    Entity previous = spawnSphere(scene, Vec3{0, 10.0f, 0}, Vec3{0, 0, 0}, 0.2f, 0.0f);
+    for (int i = 0; i < 8; ++i)
+        previous = spawnJointed(scene, Vec3{0, 10.0f - static_cast<float>(i + 1) * link, 0}, 0.2f, 1.0f, previous,
+                                link);
+    const Entity tail = previous;
+
+    std::vector<uint8_t> blob = serializeScene(scene);
+    Scene restored;
+    std::string error;
+    CHECK(deserializeScene(restored, blob.data(), blob.size(), error));
+    CHECK_EQ(restored.world.pool<Joint>().size(), size_t{8});
+
+    PhysicsWorld physics;
+    physics.settings.useBounds = false;
+    physics.settings.allowSleep = false;
+    for (int f = 0; f < 240; ++f) physics.step(restored, 1.0f / 60.0f, nullptr);
+
+    CHECK(restored.world.alive(tail));
+    const Vec3 p = restored.world.get<Transform>(tail).position;
+    CHECK(std::abs(p.y - (10.0f - 8.0f * link)) < 0.05f);
 }
 
 TEST(a_joint_pulls_a_body_back_and_a_static_anchor_does_not_move) {
