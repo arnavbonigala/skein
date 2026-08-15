@@ -304,8 +304,12 @@ never converges never goes still enough to sleep.
 A body that has been slow for 0.6 s stops integrating, stops solving and stops
 being scanned; a cell where every entry is asleep is skipped whole. It wakes
 when something moving faster than the sleep threshold touches it, or when
-anything is pushed into it deeper than 5 cm. Timed single threaded, because the
-saving is work, not parallelism:
+anything is pushed into it deeper than 5 cm. Two sleepers cannot push each
+other apart, so an overlap that appears exactly as the second one falls asleep
+would otherwise be permanent; every sixteenth frame the both-asleep pairs are
+measured again and woken if they are deep, which is what allows the positional
+correction to be as strong as it is. Timed single threaded, because the saving
+is work, not parallelism:
 
 | Scene | Sleeping off | Sleeping on | |
 |---|---|---|---|
@@ -323,17 +327,16 @@ left for 20 s, then every one of the 2M pairs checked directly:
 
 | Solver | Step | Worst overlap | Mean overlap | Fastest body |
 |---|---|---|---|---|
-| 1 iteration, warm | 0.69 ms | 45.8% of a radius | 5.6% | 0.217 m/s |
-| 2 iterations, warm | 0.78 ms | 28.7% | 3.3% | 0.175 m/s |
-| 4 iterations, warm | 1.05 ms | 23.0% | 2.3% | 0.110 m/s |
-| 8 iterations, warm | 1.89 ms | 24.9% | **1.8%** | **0.034 m/s** |
-| 2 iterations, cold | 0.69 ms | **110.0%** | 6.2% | 0.557 m/s |
+| 1 iteration, warm | 0.53 ms | 44.6% of a radius | 3.7% | 0.585 m/s |
+| 2 iterations, warm | 0.69 ms | 21.0% | 2.4% | 0.176 m/s |
+| 4 iterations, warm | 0.97 ms | 17.8% | 1.8% | 0.132 m/s |
+| 8 iterations, warm | 1.58 ms | **12.7%** | **1.4%** | **0.049 m/s** |
+| 2 iterations, cold | 0.61 ms | **130.8%** | 4.5% | 0.565 m/s |
 
 The last row is the one that matters: without warm starting, two iterations
 leave a pair fully inside each other and the pile still crawling at half a
-metre a second. Iterations past four buy a tighter mean and a stiller pile
-rather than a better worst case, which is a deep column the positional pass
-only unwinds one contact per iteration.
+metre a second. Iterations past two buy the worst case back slowly, because it
+is a deep column the positional pass only unwinds one contact per iteration.
 
 ### Fast bodies against a thin wall
 
