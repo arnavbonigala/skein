@@ -224,6 +224,7 @@ void PhysicsWorld::buildGrid(JobSystem* jobs) {
         e.z = position_[i].z;
         e.reach = reach_[i];
         e.body = static_cast<uint32_t>(i);
+        e.awake = asleep_[i] ? 0u : 1u;
         uint32_t k = entryOffset_[i];
         for (int32_t cz = bodyLo_[i * 3 + 2]; cz <= bodyHi_[i * 3 + 2]; ++cz)
             for (int32_t cy = bodyLo_[i * 3 + 1]; cy <= bodyHi_[i * 3 + 1]; ++cy)
@@ -329,7 +330,14 @@ void PhysicsWorld::findContacts(JobSystem* jobs) {
             for (uint32_t runStart = from; runStart < to;) {
                 const uint64_t key = entries_[runStart].cell;
                 uint32_t runEnd = runStart + 1;
-                while (runEnd < to && entries_[runEnd].cell == key) ++runEnd;
+                uint32_t awake = entries_[runStart].awake;
+                while (runEnd < to && entries_[runEnd].cell == key) awake += entries_[runEnd++].awake;
+                // A cell where everything is asleep can only produce pairs that
+                // are both asleep, and those are skipped anyway.
+                if (awake == 0) {
+                    runStart = runEnd;
+                    continue;
+                }
                 for (uint32_t a = runStart; a + 1 < runEnd; ++a) {
                     const GridEntry& ea = entries_[a];
                     for (uint32_t c = a + 1; c < runEnd; ++c) {

@@ -251,39 +251,56 @@ int main(int argc, char** argv) {
     {
         // Each configuration gets its own world: continuing one run from
         // another's end state would compare two different piles.
+        // Timed single threaded, because sleeping is a work reduction and
+        // thread contention swamps it in the parallel path.
         auto settleRun = [&](const DemoConfig& base, int steps, bool allowSleep) {
             Demo d;
             d.build(base, &jobs);
             d.physics.settings.allowSleep = allowSleep;
             for (int i = 0; i < steps; ++i) d.physics.step(d.scene, 1.0f / 60.0f, &jobs);
-            Timing t = measure(2, 12, [&] { d.physics.step(d.scene, 1.0f / 60.0f, &jobs); });
+            Timing t = measure(5, 40, [&] { d.physics.step(d.scene, 1.0f / 60.0f, nullptr); });
             return std::make_pair(t.median, d.physics.stats());
         };
 
-        DemoConfig calm = config;
-        calm.runScripts = false;
-        calm.entityCount = 8000;
-        calm.renderableCount = 0;
-        calm.colliderCount = 8000;
-        calm.hierarchyChildren = 0;
-        calm.fieldExtent = 45.0f;
-        calm.fieldHeight = 25.0f;
+        auto pileRun = [&](int bodies, int steps, bool allowSleep) {
+            Scene scene;
+            PhysicsWorld world;
+            world.settings.boundsMin = Vec3{-15, 0, -15};
+            world.settings.boundsMax = Vec3{15, 60, 15};
+            world.settings.restitutionFloor = 0.0f;
+            world.settings.allowSleep = allowSleep;
+            std::mt19937 rng(7);
+            std::uniform_real_distribution<float> u(-13.0f, 13.0f);
+            for (int i = 0; i < bodies; ++i) {
+                Transform t;
+                t.position = Vec3{u(rng), 1.0f + static_cast<float>(i) * 0.01f, u(rng)};
+                Entity e = scene.create(t);
+                scene.world.add<Velocity>(e, Velocity{});
+                Collider c;
+                c.radius = 0.5f;
+                c.restitution = 0.0f;
+                scene.world.add<Collider>(e, c);
+            }
+            for (int i = 0; i < steps; ++i) world.step(scene, 1.0f / 60.0f, &jobs);
+            Timing t = measure(5, 40, [&] { world.step(scene, 1.0f / 60.0f, nullptr); });
+            return std::make_pair(t.median, world.stats());
+        };
 
-        auto [calmOn, calmOnStats] = settleRun(calm, 2400, true);
-        auto [calmOff, calmOffStats] = settleRun(calm, 2400, false);
-        row("8k bodies, 40 s to settle, sleeping off", calmOff,
-            format("%u awake, %u contacts", calmOffStats.awake, calmOffStats.contacts));
-        row("8k bodies, 40 s to settle, sleeping on", calmOn,
-            format("%u of %u awake, %u contacts, ", calmOnStats.awake, calmOnStats.bodies, calmOnStats.contacts) +
-                speedup(calmOff, calmOn));
+        auto [pileOff, pileOffStats] = pileRun(4000, 1800, false);
+        auto [pileOn, pileOnStats] = pileRun(4000, 1800, true);
+        row("4k in a box, 30 s to settle, sleeping off", pileOff,
+            format("%u awake, %u contacts", pileOffStats.awake, pileOffStats.contacts));
+        row("4k in a box, 30 s to settle, sleeping on", pileOn,
+            format("%u of %u awake, %u contacts, ", pileOnStats.awake, pileOnStats.bodies, pileOnStats.contacts) +
+                speedup(pileOff, pileOn));
 
         DemoConfig churn = config;
         churn.runScripts = false;
         auto [churnOn, churnOnStats] = settleRun(churn, 600, true);
         auto [churnOff, churnOffStats] = settleRun(churn, 600, false);
-        row("30k body pile, still churning, off", churnOff,
+        row("30k demo pile, still churning, off", churnOff,
             format("%u awake, %u contacts", churnOffStats.awake, churnOffStats.contacts));
-        row("30k body pile, still churning, on", churnOn,
+        row("30k demo pile, still churning, on", churnOn,
             format("%u of %u awake, %u contacts, ", churnOnStats.awake, churnOnStats.bodies, churnOnStats.contacts) +
                 speedup(churnOff, churnOn));
     }

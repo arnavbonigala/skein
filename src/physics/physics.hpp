@@ -109,7 +109,7 @@ private:
         float x, y, z, reach;
         uint64_t cell;
         uint32_t body;
-        uint32_t pad;
+        uint32_t awake;
     };
     std::vector<GridEntry> entries_;
     std::vector<std::vector<Contact>> contactChunks_;
