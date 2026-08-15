@@ -31,7 +31,7 @@ Requires CMake 3.20, a C++20 compiler, Lua and (for the interactive demo) GLFW.
 brew install cmake lua glfw
 cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
 cmake --build build -j
-./build/skein_tests     # 84 tests
+./build/skein_tests     # 89 tests
 ./build/skein_bench     # headless CPU benchmark
 ./build/skein_bench --sweep   # plus the 25k to 1M scaling sweep
 ./build/skein_demo      # interactive window
@@ -150,9 +150,39 @@ spin, which is what lets a rolling body come to rest and the pile sleep at all.
 A test drives a ball across the floor and checks it stops skidding, starts
 rolling, and eventually stops — without the motion ever running backwards.
 
-Collision shapes are still spheres and axis-aligned boxes: a box rotates under a
-contact but is tested against its axis-aligned extent, so the narrowphase does
-not see the turn.
+A turned box is met as the box it is. Box pairs separate along the least-overlap
+axis of a fifteen-axis separating-axis test, and the face that separates them is
+clipped against the other box's nearest face, so the pair is held by the corners
+of the contact patch rather than by a single point — one point cannot stop a
+flat face from rocking about it. Which four points survive matters as much as
+finding them: dropping the shallowest leaves the choice to rounding noise on a
+patch whose points are all at the same depth, and the manifold then changes
+every frame, so the four that make the widest quad are kept instead. Each point
+is named by the feature that produced it — an incident corner, or the edge cut
+by one of the reference face's side planes — which is how its accumulated
+impulse finds it again next frame however far the pair has crept. A box whose
+rotation is identity keeps the cheap axis-aligned path, which reports the
+corners of the rectangle the two faces share rather than a point in the middle
+of it, and pairs the three world axes already separate never reach the fifteen.
+
+The positional pass had to learn to rotate with it. A box resting on one deep
+corner is separated by turning it; a solver that can only translate lifts it off
+its other corners instead and leaves it tilted for good, which is visible as a
+stack that creeps upward and then slides apart.
+
+**Substeps** — the step is solved in four substeps of two iterations rather than
+in one pass of eight. A substep integrates velocity, sweeps the contacts, and
+integrates position, so every sweep after the first answers where the pair is
+now rather than where the narrowphase left it; each contact re-derives its depth
+from the anchors it was born with, turned by however far each body has turned
+since. Substeps and iterations cost exactly the same per sweep, and the
+benchmark runs the pairs against each other at equal cost. Neither replaces the
+other: a column of turned boxes that stands at four substeps of two iterations
+falls over at one substep of eight and at eight substeps of one. Substeps buy
+fresh geometry, iterations buy news travelling down the column, and a stack
+needs both. Restitution is applied once, after the substeps: mixed into them it
+fights its own output, since the substep that answers a bounce sees the body
+leaving and winds the impulse back down to stop it.
 
 **Assets** — a hand-written OBJ parser (all four face index forms, negative
 indices, polygon fan triangulation, vertex welding, generated normals) plus
@@ -470,7 +500,7 @@ objects drop out, `O` pauses, `P` dumps the frame profile, `V` toggles vsync,
 
 ## Tests
 
-84 tests, no framework. They cover the parts where being wrong is quiet: the
+89 tests, no framework. They cover the parts where being wrong is quiet: the
 hashed grid must return exactly the brute-force contact set even when collider
 sizes vary 70x, the coloured parallel solver must land bitwise on the serial
 result, a stack of eight spheres must still be standing after ten seconds, a
