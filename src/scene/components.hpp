@@ -33,6 +33,9 @@ struct Collider {
     uint32_t kind = static_cast<uint32_t>(ColliderKind::Sphere);
     float invMass = 1.0f;
     float restitution = 0.5f;
+    /// Coulomb friction of this surface. A pair rubs at the geometric mean of
+    /// the two, so ice on ice is slippery and ice on rubber is in between.
+    float friction = 0.4f;
     /// How long the body has been slow enough to be a sleep candidate, and
     /// whether it has crossed the threshold. The physics world owns both.
     float sleepTimer = 0.0f;

@@ -53,8 +53,8 @@ struct PhysicsSettings {
     /// kept so the benchmark can measure what the rotation costs.
     bool angularContacts = true;
     float angularDamping = 0.05f;
-    /// Coulomb friction coefficient shared by every contact.
-    /// ponytail: global, move onto Collider when materials need to differ.
+    /// Coulomb friction of the world bounds. Body-to-body friction comes from
+    /// the pair's own colliders instead.
     float friction = 0.4f;
     /// A body slower than `sleepSpeed` for `sleepTime` seconds stops being
     /// integrated and solved until something touches it.
@@ -185,6 +185,7 @@ private:
     std::vector<float> radius_;
     std::vector<float> invMass_;
     std::vector<float> restitution_;
+    std::vector<float> friction_;
     std::vector<uint32_t> kind_;
     std::vector<float> sleepTimer_;
     std::vector<uint8_t> asleep_;

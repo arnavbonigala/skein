@@ -125,6 +125,7 @@ int l_spawn(lua_State* L) {
             c.radius = optNumberField(L, ct, "radius", c.radius);
             c.invMass = optNumberField(L, ct, "inv_mass", c.invMass);
             c.restitution = optNumberField(L, ct, "restitution", c.restitution);
+            c.friction = optNumberField(L, ct, "friction", c.friction);
             c.halfExtents = optVec3Field(L, ct, "half_extents", c.halfExtents);
             scene->world.add<Collider>(e, c);
             if (!scene->world.has<Velocity>(e)) scene->world.add<Velocity>(e, Velocity{});

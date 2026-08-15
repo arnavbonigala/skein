@@ -311,6 +311,7 @@ void PhysicsWorld::gather(Scene& scene) {
     radius_.resize(n);
     invMass_.resize(n);
     restitution_.resize(n);
+    friction_.resize(n);
     kind_.resize(n);
     sleepTimer_.resize(n);
     asleep_.resize(n);
@@ -352,6 +353,7 @@ void PhysicsWorld::gather(Scene& scene) {
         radius_[m] = c.radius * s;
         invMass_[m] = c.invMass;
         restitution_[m] = c.restitution;
+        friction_[m] = c.friction;
         kind_[m] = c.kind;
         sleepTimer_[m] = c.sleepTimer;
         // Anything outside physics that gives a sleeper velocity — a script, the
@@ -410,6 +412,7 @@ void PhysicsWorld::gather(Scene& scene) {
         radius_.resize(m);
         invMass_.resize(m);
         restitution_.resize(m);
+        friction_.resize(m);
         kind_.resize(m);
         sleepTimer_.resize(m);
         asleep_.resize(m);
@@ -1078,7 +1081,6 @@ void PhysicsWorld::prepareContacts(JobSystem* jobs) {
 }
 
 void PhysicsWorld::solveRange(uint32_t begin, uint32_t end, bool positional, float invDt) {
-    const float friction = settings.friction;
     const bool angular = settings.angularContacts;
     for (uint32_t idx = begin; idx < end; ++idx) {
         const uint32_t k = colorOrder_[idx];
@@ -1151,7 +1153,7 @@ void PhysicsWorld::solveRange(uint32_t begin, uint32_t end, bool positional, flo
             // sliding in; the two in-plane axes do not resist a spin equally.
             float tangentMass = angular && sl > 1e-9f ? effMass(slide / sl) : imSum;
             Vec3 want = tangentImpulse_[k] - slide / tangentMass;
-            float limit = friction * total;
+            float limit = std::sqrt(friction_[c.a] * friction_[c.b]) * total;
             float wl = length(want);
             if (wl > limit) want = wl > 1e-12f ? want * (limit / wl) : Vec3{0, 0, 0};
             Vec3 applyT = want - tangentImpulse_[k];
@@ -1844,7 +1846,7 @@ size_t PhysicsWorld::bytesUsed() const {
                    bytes(jointAnchorA_) + bytes(jointAnchorB_) + bytes(jointB_) + bytes(jointCompliance_) +
                    bytes(jointImpulse_) + bytes(jointLength_) + bytes(kind_) + bytes(liveDepth_) + bytes(motion_) +
                    bytes(normalImpulse_) + bytes(normalMass_) + bytes(orientation_) + bytes(position_) +
-                   bytes(pseudo_) + bytes(radius_) + bytes(reach_) + bytes(restitution_) +
+                   bytes(pseudo_) + bytes(radius_) + bytes(reach_) + bytes(restitution_) + bytes(friction_) +
                    bytes(restitutionBias_) + bytes(rotated_) + bytes(sleepTimer_) + bytes(slot_) +
                    bytes(spinDelta_) + bytes(sweep_) + bytes(tangentImpulse_) + bytes(velocity_);
     for (const auto& c : contactChunks_) total += bytes(c);

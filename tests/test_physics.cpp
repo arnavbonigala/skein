@@ -991,6 +991,27 @@ TEST(a_chain_of_joints_hangs_from_its_anchor_without_stretching) {
     }
 }
 
+TEST(a_slippery_box_slides_further_and_a_pair_rubs_at_the_mean_of_the_two) {
+    auto slide = [](float floor, float box) {
+        Scene scene;
+        PhysicsWorld physics;
+        physics.settings.useBounds = false;
+        physics.settings.allowSleep = false;
+        Entity ground = spawnBox(scene, Vec3{0, -1, 0}, Quat{}, Vec3{60, 1, 10}, 0.0f);
+        scene.world.get<Collider>(ground).friction = floor;
+        Entity slab = spawnBox(scene, Vec3{-40.0f, 0.5f, 0}, Quat{}, Vec3{0.5f, 0.5f, 0.5f}, 1.0f);
+        scene.world.get<Collider>(slab).friction = box;
+        scene.world.get<Velocity>(slab).linear = Vec3{6.0f, 0, 0};
+        for (int f = 0; f < 600; ++f) physics.step(scene, 1.0f / 60.0f, nullptr);
+        return scene.world.get<Transform>(slab).position.x + 40.0f;
+    };
+    const float ice = slide(0.02f, 0.02f);
+    const float rubber = slide(0.9f, 0.9f);
+    const float mixed = slide(0.02f, 0.9f);
+    CHECK(mixed > rubber * 3.0f);
+    CHECK(ice > mixed * 3.0f);
+}
+
 TEST(a_chain_still_hangs_after_being_saved_and_loaded) {
     Scene scene;
     const float link = 0.8f;
