@@ -160,7 +160,9 @@ void Demo::build(const DemoConfig& cfg, JobSystem* jobs) {
 
     physics.settings.boundsMin = fieldMin_;
     physics.settings.boundsMax = fieldMax_;
-    physics.settings.cellSize = 3.0f;
+    // Measured on this scene: the scan walks a cell's entries contiguously, so
+    // fewer, fatter cells beat more, tighter ones until about here.
+    physics.settings.cellSize = 4.0f;
 
     script.bind(&scene, &assets);
     scene.updateTransforms(jobs);
