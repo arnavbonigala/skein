@@ -28,7 +28,19 @@ struct Timing {
     double best = 0;
     double p99 = 0;
     double worst = 0;
+    /// Median core-milliseconds the process burned during a sample, across
+    /// every thread. Wall time on a busy machine measures the machine; this
+    /// measures the work, and stays put while wall time triples.
+    double cpu = 0;
 };
+
+/// User plus system time so far, over every thread in the process.
+double cpuMillis() {
+    rusage usage{};
+    getrusage(RUSAGE_SELF, &usage);
+    return (usage.ru_utime.tv_sec + usage.ru_stime.tv_sec) * 1e3 +
+           (usage.ru_utime.tv_usec + usage.ru_stime.tv_usec) * 1e-3;
+}
 
 /// Involuntary context switches so far, across every thread in the process.
 /// A sample that spans one was measured while something else owned the core.
@@ -52,12 +64,15 @@ Timing measure(int warmup, int iterations, Fn&& fn) {
     for (int i = 0; i < warmup; ++i) fn();
     std::vector<double> samples;
     std::vector<double> clean;
+    std::vector<double> cpu;
     samples.reserve(static_cast<size_t>(iterations));
     for (int i = 0; i < iterations; ++i) {
         long before = preemptions();
+        double cpuBefore = cpuMillis();
         Clock::time_point start = Clock::now();
         fn();
         double ms = millisSince(start);
+        cpu.push_back(cpuMillis() - cpuBefore);
         samples.push_back(ms);
         if (preemptions() == before) clean.push_back(ms);
     }
@@ -67,7 +82,9 @@ Timing measure(int warmup, int iterations, Fn&& fn) {
     // honest number, since what is left is not a distribution.
     if (clean.size() >= 5) samples.swap(clean);
     std::sort(samples.begin(), samples.end());
+    std::sort(cpu.begin(), cpu.end());
     Timing t;
+    t.cpu = cpu[cpu.size() / 2];
     t.median = samples[samples.size() / 2];
     t.best = samples.front();
     t.p99 = samples[static_cast<size_t>(static_cast<double>(samples.size() - 1) * 0.99)];
@@ -227,6 +244,15 @@ int main(int argc, char** argv) {
     row("single threaded", physicsSerial.median, perEntity(physicsSerial.median, ps.bodies));
     row("job system", physicsParallel.median,
         perEntity(physicsParallel.median, ps.bodies) + "  " + speedup(physicsSerial.median, physicsParallel.median));
+    // Wall time on a contended machine is a measurement of the contention. The
+    // core-milliseconds behind it are not: they move when the engine changes
+    // and sit still when the machine gets busy, which makes them the number to
+    // compare two builds by when a quiet machine is not on offer.
+    fact("work done", format("%.3f core-ms serial, %.3f across the job system's threads (%.2fx the serial work "
+                             "for %.2fx the speed)",
+                             physicsSerial.cpu, physicsParallel.cpu,
+                             physicsParallel.cpu / std::max(1e-9, physicsSerial.cpu),
+                             physicsSerial.median / std::max(1e-9, physicsParallel.median)));
     fact("broadphase", format("%u bodies, %llu pairs tested, %u contacts, %u occupied cells", ps.bodies,
                               static_cast<unsigned long long>(ps.pairsTested), ps.contacts, ps.gridCells));
     fact("pair funnel", format("%llu tested, %llu within reach, %llu dropped as another cell's, %u contacts",
@@ -1056,6 +1082,8 @@ int main(int argc, char** argv) {
                            100.0 * static_cast<double>(gPreempted) / std::max(1L, gTotalSamples)));
     fact("what that means", "a sample the scheduler interrupted is a measurement of whatever interrupted it, "
                             "so it is thrown away rather than averaged in");
+    fact("if most were dropped", "nothing here was measured on a quiet machine; compare builds by the "
+                                 "serial core-ms under \"physics step\", which is the work rather than the wait");
     std::printf("\n");
     return 0;
 }
