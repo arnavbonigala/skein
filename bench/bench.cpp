@@ -1192,6 +1192,9 @@ int main(int argc, char** argv) {
                         format("%d", count).c_str(), build, ecs.median, xf.median, flatT.median, mortonT.median,
                         speedup(flatT.median, mortonT.median).c_str(), mortonList.visible, mortonList.totalCandidates);
             if (mortonList.visible != flatList.visible) std::printf("  MISMATCH at %d entities\n", count);
+            const CullStats& cs = morton.stats();
+            std::printf("  %-38s %u clusters, %u straddling, %u of %u objects tested individually\n", "",
+                        cs.clusters, cs.clustersStraddling, cs.objectsTested, mortonList.totalCandidates);
         }
     } else {
         fact("skipped", "pass --sweep to run the 25k to 1M scaling sweep");
