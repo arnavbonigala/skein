@@ -182,10 +182,14 @@ in one pass of eight. A substep integrates velocity, sweeps the contacts, and
 integrates position, so every sweep after the first answers where the pair is
 now rather than where the narrowphase left it; each contact re-derives its depth
 from the anchors it was born with, turned by however far each body has turned
-since. Substeps and iterations cost exactly the same per sweep, and the
-benchmark runs the pairs against each other at equal cost. Neither replaces the
-other: a column of turned boxes that stands at four substeps of two iterations
-falls over at one substep of eight and at eight substeps of one. Substeps buy
+since. Substeps and iterations cost exactly the same per sweep, so the benchmark runs
+the whole matrix of them against sixteen columns of eight turned boxes and
+sorts it by what each mix costs. Rows sharing a sweep count are the same solver
+work spent two ways and do not land in the same place: at four sweeps, four
+substeps of one iteration leaves the top box 53% of the way up, two of two
+leaves it at 9%, and one of four at 1%. Nothing below six sweeps stands at all;
+six very nearly does either way round; four substeps of two iterations is the
+cheapest mix that actually stands, which is why it is the default. Substeps buy
 fresh geometry, iterations buy news travelling down the column, and a stack
 needs both. Restitution is applied once, after the substeps: mixed into them it
 fights its own output, since the substep that answers a bounce sees the body

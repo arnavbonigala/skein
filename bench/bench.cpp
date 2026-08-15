@@ -354,7 +354,7 @@ int main(int argc, char** argv) {
         }
     }
 
-    heading("stacks of turned boxes (16 columns of 6)");
+    heading("stacks of turned boxes (16 columns of 8)");
     {
         // A box face is held by four contact points at once, and each of them
         // can rotate the pair as well as push it. This is what that costs and
@@ -364,6 +364,9 @@ int main(int argc, char** argv) {
         // one sweep of the contacts each. The difference is that a substep also
         // moves the bodies, so every sweep after the first is answering where
         // the pair is now rather than where it was when the step began.
+        // Six boxes stand on anything past four sweeps, so the tower is eight:
+        // the point of the matrix is the height where the mixes separate.
+        constexpr int kTowerHeight = 8;
         auto tower = [&](bool oriented, int substeps, int iters) {
             Scene scene;
             PhysicsWorld world;
@@ -391,11 +394,11 @@ int main(int argc, char** argv) {
             for (int c = 0; c < 16; ++c) {
                 float x = static_cast<float>(c % 4) * 4.0f - 6.0f;
                 float z = static_cast<float>(c / 4) * 4.0f - 6.0f;
-                for (int i = 0; i < 6; ++i) {
+                for (int i = 0; i < kTowerHeight; ++i) {
                     Entity e = box(Vec3{x, 0.5f + static_cast<float>(i) * 1.02f, z},
                                    Quat::axisAngle(Vec3{0, 1, 0}, 0.35f * static_cast<float>(i + c)),
                                    Vec3{0.5f, 0.5f, 0.5f}, 1.0f);
-                    if (i == 5) tops.push_back(e);
+                    if (i == kTowerHeight - 1) tops.push_back(e);
                 }
             }
             for (int i = 0; i < 600; ++i) world.step(scene, 1.0f / 60.0f, &jobs);
@@ -411,20 +414,26 @@ int main(int argc, char** argv) {
             return std::make_tuple(t.median, height / n, speed / n, tilt / n * 180.0 / PI,
                                    static_cast<double>(world.stats().contacts));
         };
-        const double ideal = 0.5 + 5.0;
+        const double ideal = 0.5 + (kTowerHeight - 1) * 1.0;
         auto report = [&](const char* label, std::tuple<double, double, double, double, double> r) {
             auto [ms, top, speed, tilt, contacts] = r;
             row(label, ms,
                 format("top box at %.2f of %.2f (%.0f%% standing), %.0f contacts, %.3f m/s left, %.1f deg of lean",
                        top, ideal, 100.0 * (top - 0.5) / (ideal - 0.5), contacts, speed, tilt));
         };
-        report("1 substep  x 2 iterations", tower(true, 1, 2));
-        report("2 substeps x 1 iteration ", tower(true, 2, 1));
-        report("1 substep  x 4 iterations", tower(true, 1, 4));
-        report("4 substeps x 1 iteration ", tower(true, 4, 1));
-        report("1 substep  x 8 iterations", tower(true, 1, 8));
-        report("8 substeps x 1 iteration ", tower(true, 8, 1));
-        report("4 substeps, axis-aligned ", tower(false, 4, 1));
+        // The whole matrix rather than a few pairs, ordered by what it costs.
+        // Rows sharing a sweep count are the same amount of solver work spent
+        // two different ways, and they do not land in the same place.
+        std::vector<std::tuple<int, int, int>> mixes;
+        for (int substeps = 1; substeps <= 4; ++substeps)
+            for (int iters = 1; iters <= 3; ++iters) mixes.emplace_back(substeps * iters, substeps, iters);
+        std::sort(mixes.begin(), mixes.end());
+        for (auto [sweeps, substeps, iters] : mixes)
+            report(format("%d substep%s x %d iteration%s = %2d", substeps, substeps == 1 ? " " : "s", iters,
+                          iters == 1 ? " " : "s", sweeps)
+                       .c_str(),
+                   tower(true, substeps, iters));
+        report("axis-aligned, 4 x 1       ", tower(false, 4, 1));
     }
 
     heading("sleeping bodies");
