@@ -40,24 +40,26 @@ bool resolve(int raw, size_t count, size_t& out) {
     return false;
 }
 
-Ref parseRef(const char* token) {
-    Ref r;
-    char buf[128];
-    size_t len = std::strlen(token);
-    if (len >= sizeof(buf)) len = sizeof(buf) - 1;
-    std::memcpy(buf, token, len);
-    buf[len] = 0;
-
-    char* p = buf;
-    r.v = std::atoi(p);
-    char* slash = std::strchr(p, '/');
-    if (!slash) return r;
-    p = slash + 1;
-    if (*p != '/') r.t = std::atoi(p);
-    slash = std::strchr(p, '/');
-    if (!slash) return r;
-    r.n = std::atoi(slash + 1);
-    return r;
+/// Reads `v`, `v/t`, `v//n` or `v/t/n` in place. Returns the end of the token.
+const char* parseRef(const char* p, const char* end, Ref& r) {
+    auto integer = [&](const char*& q) {
+        int sign = 1;
+        if (q < end && (*q == '-' || *q == '+')) sign = *q++ == '-' ? -1 : 1;
+        int value = 0;
+        while (q < end && *q >= '0' && *q <= '9') value = value * 10 + (*q++ - '0');
+        return sign * value;
+    };
+    r = Ref{};
+    r.v = integer(p);
+    if (p < end && *p == '/') {
+        ++p;
+        if (p < end && *p != '/') r.t = integer(p);
+        if (p < end && *p == '/') {
+            ++p;
+            r.n = integer(p);
+        }
+    }
+    return p;
 }
 
 }  // namespace
@@ -72,45 +74,73 @@ bool parseObj(const std::string& text, MeshData& out, std::string& error) {
     out.indices.clear();
     bool anyNormals = false;
 
-    std::istringstream stream(text);
-    std::string line;
+    // The text is walked in place. A `getline` into a std::string plus a
+    // `sscanf` per line spends most of its time on allocation and format
+    // parsing rather than on the numbers, and an OBJ is nothing but numbers.
+    const char* p = text.c_str();
+    const char* end = p + text.size();
     size_t lineNo = 0;
     std::vector<uint32_t> face;
 
-    while (std::getline(stream, line)) {
-        ++lineNo;
-        if (!line.empty() && line.back() == '\r') line.pop_back();
-        const char* s = line.c_str();
-        while (*s == ' ' || *s == '\t') ++s;
-        if (*s == '#' || *s == 0) continue;
+    auto skipBlanks = [&](const char*& q) {
+        while (q < end && (*q == ' ' || *q == '\t')) ++q;
+    };
+    // strtof stops at the first character it cannot use and the buffer is
+    // NUL-terminated as a whole, so it is safe to call on any interior pointer.
+    auto readFloat = [&](const char*& q, float& value) {
+        skipBlanks(q);
+        char* stop = nullptr;
+        value = std::strtof(q, &stop);
+        if (stop == q) return false;
+        q = stop;
+        return true;
+    };
 
-        if (s[0] == 'v' && (s[1] == ' ' || s[1] == '\t')) {
+    while (p < end) {
+        ++lineNo;
+        const char* eol = static_cast<const char*>(std::memchr(p, '\n', static_cast<size_t>(end - p)));
+        const char* lineEnd = eol ? eol : end;
+        const char* s = p;
+        p = eol ? eol + 1 : end;
+        if (lineEnd > s && lineEnd[-1] == '\r') --lineEnd;
+        skipBlanks(s);
+        if (s >= lineEnd || *s == '#') continue;
+
+        if (s[0] == 'v' && s + 1 < lineEnd && (s[1] == ' ' || s[1] == '\t')) {
+            const char* q = s + 1;
             float x = 0, y = 0, z = 0;
-            if (std::sscanf(s + 1, "%f %f %f", &x, &y, &z) != 3) {
+            if (!readFloat(q, x) || !readFloat(q, y) || !readFloat(q, z)) {
                 error = "bad vertex on line " + std::to_string(lineNo);
                 return false;
             }
             positions.push_back({x, y, z});
-        } else if (s[0] == 'v' && s[1] == 'n') {
+        } else if (s[0] == 'v' && s + 1 < lineEnd && s[1] == 'n') {
+            const char* q = s + 2;
             float x = 0, y = 0, z = 0;
-            if (std::sscanf(s + 2, "%f %f %f", &x, &y, &z) != 3) {
+            if (!readFloat(q, x) || !readFloat(q, y) || !readFloat(q, z)) {
                 error = "bad normal on line " + std::to_string(lineNo);
                 return false;
             }
             normals.push_back({x, y, z});
-        } else if (s[0] == 'v' && s[1] == 't') {
+        } else if (s[0] == 'v' && s + 1 < lineEnd && s[1] == 't') {
+            const char* q = s + 2;
             float u = 0, v = 0;
-            if (std::sscanf(s + 2, "%f %f", &u, &v) < 1) {
+            if (!readFloat(q, u)) {
                 error = "bad texcoord on line " + std::to_string(lineNo);
                 return false;
             }
+            readFloat(q, v);
             uvs.push_back({u, v});
-        } else if (s[0] == 'f' && (s[1] == ' ' || s[1] == '\t')) {
+        } else if (s[0] == 'f' && s + 1 < lineEnd && (s[1] == ' ' || s[1] == '\t')) {
             face.clear();
-            std::istringstream fs(s + 1);
-            std::string token;
-            while (fs >> token) {
-                Ref ref = parseRef(token.c_str());
+            const char* q = s + 1;
+            for (;;) {
+                skipBlanks(q);
+                if (q >= lineEnd) break;
+                Ref ref;
+                const char* after = parseRef(q, lineEnd, ref);
+                if (after == q) break;
+                q = after;
                 auto it = lookup.find(ref);
                 if (it != lookup.end()) {
                     face.push_back(it->second);

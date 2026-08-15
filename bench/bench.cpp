@@ -11,6 +11,7 @@
 #include <vector>
 
 #include "app/demo_scene.hpp"
+#include "assets/mesh.hpp"
 #include "core/jobs.hpp"
 #include "core/profiler.hpp"
 #include "render/render_list.hpp"
@@ -557,6 +558,48 @@ int main(int argc, char** argv) {
             row(format("empty pass, %2zu chunks", chunks).c_str(), t.median,
                 format("%.1f us median, %.1f us worst of 400", t.median * 1000.0, t.worst * 1000.0));
         }
+    }
+
+    heading("obj parsing");
+    {
+        // A generated icosphere-ish grid, written out the way an exporter would:
+        // every face referencing shared position/normal/uv triplets, so the
+        // parser's weld table is doing real work rather than passing text
+        // through.
+        std::string text;
+        const int rings = 240, segments = 480;
+        text.reserve(1 << 22);
+        for (int r = 0; r <= rings; ++r) {
+            float v = static_cast<float>(r) / static_cast<float>(rings);
+            float phi = v * 3.14159265f;
+            for (int c = 0; c <= segments; ++c) {
+                float u = static_cast<float>(c) / static_cast<float>(segments);
+                float theta = u * 6.2831853f;
+                float x = std::sin(phi) * std::cos(theta), y = std::cos(phi), z = std::sin(phi) * std::sin(theta);
+                text += format("v %.5f %.5f %.5f\n", x, y, z);
+                text += format("vn %.5f %.5f %.5f\n", x, y, z);
+                text += format("vt %.5f %.5f\n", u, v);
+            }
+        }
+        auto index = [&](int r, int c) { return r * (segments + 1) + c + 1; };
+        for (int r = 0; r < rings; ++r)
+            for (int c = 0; c < segments; ++c) {
+                int a = index(r, c), b = index(r, c + 1), d = index(r + 1, c + 1), e = index(r + 1, c);
+                text += format("f %d/%d/%d %d/%d/%d %d/%d/%d %d/%d/%d\n", a, a, a, b, b, b, d, d, d, e, e, e);
+            }
+
+        MeshData mesh;
+        std::string parseError;
+        Timing t = measure(1, 5, [&] { parseObj(text, mesh, parseError); });
+        const double mb = static_cast<double>(text.size()) / (1024.0 * 1024.0);
+        row("parse", t.median,
+            format("%s of text, %.0f MB/s", bytes(text.size()).c_str(), mb / (t.median / 1000.0)));
+        fact("welding", format("%zu triangles, %zu unique vertices from %d face corners (%.1fx reuse)",
+                               mesh.indices.size() / 3, mesh.vertices.size(), rings * segments * 4,
+                               static_cast<double>(rings * segments * 4) /
+                                   static_cast<double>(std::max<size_t>(mesh.vertices.size(), 1))));
+        fact("throughput", format("%.1f M triangles/s", static_cast<double>(mesh.indices.size() / 3) /
+                                                            (t.median / 1000.0) / 1e6));
     }
 
     heading("serialization");
