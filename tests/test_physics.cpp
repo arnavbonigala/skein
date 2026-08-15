@@ -293,6 +293,26 @@ TEST(a_stack_holds_its_height_at_the_default_iteration_count) {
     CHECK(top > radius + 7.0f * (2.0f * radius - 0.08f));
 }
 
+TEST(friction_stops_a_body_sliding_along_the_floor) {
+    auto slide = [](float friction) {
+        Scene scene;
+        PhysicsWorld world;
+        world.settings.boundsMin = Vec3{-50, 0, -50};
+        world.settings.boundsMax = Vec3{50, 40, 50};
+        world.settings.restitutionFloor = 0.0f;
+        world.settings.linearDamping = 0.0f;
+        world.settings.allowSleep = false;
+        world.settings.friction = friction;
+        Entity e = spawnSphere(scene, Vec3{-20, 0.5f, 0}, Vec3{6, 0, 0}, 0.5f);
+        scene.world.tryGet<Collider>(e)->restitution = 0.0f;
+        for (int i = 0; i < 300; ++i) world.step(scene, 1.0f / 60.0f);
+        return length(scene.world.tryGet<Velocity>(e)->linear);
+    };
+    // Frictionless, nothing on the floor slows it down at all.
+    CHECK_NEAR(slide(0.0f), 6.0, 0.01);
+    CHECK(slide(0.4f) < 0.5f);
+}
+
 TEST(a_script_that_throws_a_sleeping_body_wakes_it) {
     // demo.lua recycles fallen bodies by teleporting them and setting a
     // velocity. A sleeper that ignored that would hang in mid air.
