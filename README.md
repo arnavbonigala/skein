@@ -582,15 +582,15 @@ figures are medians over 200 frames with vsync off.
 
 | Path | CPU frame | GPU | Ceiling | Render CPU | Submit | Draw calls | Objects |
 |---|---|---|---|---|---|---|---|
-| Instanced + culled | **1.30 ms** | 5.29 ms | **189 fps** | 0.95 ms | 0.20 ms | 72 | 22,929 |
-| Instanced, no culling | 1.55 ms | 6.34 ms | 158 fps | 1.06 ms | 0.22 ms | 72 | 37,316 |
-| One draw per object, culled | 16.81 ms | 13.32 ms | 60 fps | 13.63 ms | 12.75 ms | 26,101 | 22,929 |
-| One draw per object, no culling | 22.38 ms | 20.22 ms | 45 fps | 21.59 ms | 20.50 ms | 40,488 | 37,316 |
+| Instanced + culled | **1.26 ms** | 5.39 ms | **185 fps** | 0.93 ms | 0.20 ms | 72 | 23,094 |
+| Instanced, no culling | 1.58 ms | 6.36 ms | 157 fps | 1.16 ms | 0.25 ms | 72 | 37,580 |
+| One draw per object, culled | 16.66 ms | 14.04 ms | 60 fps | 14.13 ms | 13.21 ms | 26,430 | 23,094 |
+| One draw per object, no culling | 22.99 ms | 20.69 ms | 44 fps | 21.96 ms | 20.69 ms | 40,916 | 37,580 |
 
-Batching the same 37,316 objects collapses 40,488 draw calls into 72 and cuts
-submission from 20.50 ms to 0.22 ms — **93x** — taking the CPU frame from 22.38
-to 1.55 ms and the ceiling from 45 to 158 fps. Once batched the frame is
-GPU-bound, and culling removes another 39% of the objects for 1.1 ms of GPU
+Batching the same 37,580 objects collapses 40,916 draw calls into 72 and cuts
+submission from 20.69 ms to 0.25 ms — **83x** — taking the CPU frame from 22.99
+to 1.58 ms and the ceiling from 44 to 157 fps. Once batched the frame is
+GPU-bound, and culling removes another 39% of the objects for 1.0 ms of GPU
 time on top.
 
 ### Serialization, scripting, memory
