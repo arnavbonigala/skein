@@ -1012,6 +1012,15 @@ void PhysicsWorld::solveRange(uint32_t begin, uint32_t end, bool positional, flo
         float applied = total - previous;
         if (applied != 0.0f) applyImpulse(c.normal * applied);
 
+        // A pair still apart, that the normal constraint is not holding and
+        // that friction was not holding either, has nothing left to solve: no
+        // budget for friction, no torque to roll off, and no overlap to push
+        // out. Speculative contacts spend most of their lives here, and the
+        // grid hands the solver a lot of them.
+        if (total == 0.0f && depth < -kSlop && tangentImpulse_[k].x == 0.0f &&
+            tangentImpulse_[k].y == 0.0f && tangentImpulse_[k].z == 0.0f)
+            continue;
+
         // Coulomb friction along the contact tangent, bounded by the normal
         // impulse holding the pair together. Without it a pile of frictionless
         // spheres slides forever and never settles.
