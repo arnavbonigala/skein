@@ -852,13 +852,46 @@ int main(int argc, char** argv) {
     }
 
     heading("job system scaling (full frame update)");
-    for (int workers : {0, 1, 2, 3, 5, 7, 9, 11, 15}) {
-        if (workers > static_cast<int>(hw) - 1) break;
-        JobSystem pool(workers);
-        Timing t = measure(2, std::max(iterations / 4, 4), [&] { demo.update(1.0f / 60.0f, workers ? &pool : nullptr); });
-        char label[64];
-        std::snprintf(label, sizeof(label), "%d thread%s", workers + 1, workers == 0 ? "" : "s");
-        row(label, t.median, speedup(frameSerial.median, t.median));
+    {
+        // Thread counts are interleaved rather than measured one block at a
+        // time. Measured in blocks, a machine whose load moves during the run
+        // charges the whole drift to whichever counts were unlucky, and the
+        // table comes out saying eight threads are slower than one. Round
+        // robin spreads the same drift across every row, and the baseline the
+        // speedups are against is the one-thread row from this same loop
+        // rather than a number measured minutes earlier.
+        std::vector<int> workerCounts;
+        for (int workers : {0, 1, 2, 3, 5, 7, 9, 11, 15})
+            if (workers <= static_cast<int>(hw) - 1) workerCounts.push_back(workers);
+        std::vector<std::unique_ptr<JobSystem>> pools;
+        for (int workers : workerCounts)
+            pools.push_back(workers ? std::make_unique<JobSystem>(workers) : nullptr);
+        std::vector<std::vector<double>> samples(workerCounts.size());
+        std::vector<std::vector<double>> clean(workerCounts.size());
+        const int reps = std::max(iterations / 4, 4);
+        for (int r = -2; r < reps; ++r) {
+            for (size_t i = 0; i < workerCounts.size(); ++i) {
+                long before = preemptions();
+                Clock::time_point start = Clock::now();
+                demo.update(1.0f / 60.0f, pools[i].get());
+                double ms = millisSince(start);
+                if (r < 0) continue;
+                samples[i].push_back(ms);
+                if (preemptions() == before) clean[i].push_back(ms);
+            }
+        }
+        double base = 0;
+        for (size_t i = 0; i < workerCounts.size(); ++i) {
+            // A hundred-millisecond frame on a loaded machine is preempted
+            // every time, so the clean set is used when there is one and the
+            // median of everything when there is not.
+            std::vector<double>& use = clean[i].size() >= 5 ? clean[i] : samples[i];
+            std::sort(use.begin(), use.end());
+            const double ms = use[use.size() / 2];
+            if (base == 0) base = ms;
+            row(format("%d thread%s", workerCounts[i] + 1, workerCounts[i] == 0 ? "" : "s").c_str(), ms,
+                speedup(base, ms) + format(", %zu of %d samples uninterrupted", clean[i].size(), reps));
+        }
     }
 
     heading("job dispatch overhead");
