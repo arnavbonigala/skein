@@ -315,6 +315,26 @@ saving is work, not parallelism:
 The second row is the point of the first: a pile that never settles pays only
 the bookkeeping for a feature it cannot use.
 
+### What the solver leaves behind
+
+Speed is half of a solver; the other half is how much of the pile is still
+inside itself when the motion stops. 2,000 spheres dropped into a 24 m box and
+left for 20 s, then every one of the 2M pairs checked directly:
+
+| Solver | Step | Worst overlap | Mean overlap | Fastest body |
+|---|---|---|---|---|
+| 1 iteration, warm | 0.69 ms | 45.8% of a radius | 5.6% | 0.217 m/s |
+| 2 iterations, warm | 0.78 ms | 28.7% | 3.3% | 0.175 m/s |
+| 4 iterations, warm | 1.05 ms | 23.0% | 2.3% | 0.110 m/s |
+| 8 iterations, warm | 1.89 ms | 24.9% | **1.8%** | **0.034 m/s** |
+| 2 iterations, cold | 0.69 ms | **110.0%** | 6.2% | 0.557 m/s |
+
+The last row is the one that matters: without warm starting, two iterations
+leave a pair fully inside each other and the pile still crawling at half a
+metre a second. Iterations past four buy a tighter mean and a stiller pile
+rather than a better worst case, which is a deep column the positional pass
+only unwinds one contact per iteration.
+
 ### Fast bodies against a thin wall
 
 400 spheres of radius 0.15 fired at 20 to 220 m/s at a 0.5 m thick static slab,
