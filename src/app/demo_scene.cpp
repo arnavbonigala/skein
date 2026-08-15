@@ -158,6 +158,45 @@ void Demo::build(const DemoConfig& cfg, JobSystem* jobs) {
         scene.world.add<Velocity>(e, Velocity{Vec3{signedUnit(rng) * 4.0f, 0, signedUnit(rng) * 4.0f}, Vec3{}});
     }
 
+    // Ropes hang from a static anchor high enough to swing clear of the pile.
+    // Every link is a body the solver already knows how to handle; the joints
+    // are the only thing here that is not a contact.
+    const uint32_t ballMesh = meshIds_[1];
+    for (int r = 0; r < cfg.ropes; ++r) {
+        const float x = planar(rng) * 0.35f;
+        const float z = planar(rng) * 0.35f;
+        const float top = cfg.fieldHeight * 0.55f;
+        Entity previous = NULL_ENTITY;
+        for (int i = 0; i <= cfg.ropeLinks; ++i) {
+            Transform t;
+            t.position = Vec3{x, top - static_cast<float>(i), z};
+            t.scale = Vec3{0.5f, 0.5f, 0.5f};
+            Entity e = scene.create(t);
+            scene.world.add<Velocity>(e, Velocity{});
+            Collider c;
+            c.radius = 0.25f;
+            c.invMass = i == 0 ? 0.0f : 1.0f;
+            c.restitution = 0.1f;
+            scene.world.add<Collider>(e, c);
+            scene.world.add<Renderable>(e, Renderable{ballMesh, 1, 1, 0});
+            CullBounds cb;
+            const AABB& b = assets.mesh(ballMesh).bounds;
+            cb.localCenter = b.center();
+            cb.localExtent = b.extent() * 0.5f;
+            cb.center = cb.localCenter;
+            cb.extent = cb.localExtent;
+            cb.radius = length(cb.extent);
+            scene.world.add<CullBounds>(e, cb);
+            if (previous != NULL_ENTITY) {
+                Joint j;
+                j.other = previous;
+                j.length = 1.0f;
+                scene.world.add<Joint>(e, j);
+            }
+            previous = e;
+        }
+    }
+
     physics.settings.boundsMin = fieldMin_;
     physics.settings.boundsMax = fieldMax_;
     // Measured on this scene: the scan walks a cell's entries contiguously, so

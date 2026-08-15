@@ -156,6 +156,7 @@ void handleMovement(GLFWwindow* window, float dt) {
 
 int main(int argc, char** argv) {
     DemoConfig config;
+    config.ropes = 24;
     int captureFrames = 0;
     std::string scriptPath = std::string(SKEIN_ASSET_DIR) + "/scripts/demo.lua";
     for (int i = 1; i < argc; ++i) {

@@ -22,6 +22,11 @@ struct DemoConfig {
     float fieldHeight = 90.0f;
     uint32_t seed = 1337;
     bool runScripts = true;
+    /// Hanging chains of jointed spheres, for a scene where the solver has a
+    /// constraint that is not a contact. Zero in the benchmark, so the tables
+    /// measure one scene.
+    int ropes = 0;
+    int ropeLinks = 10;
     /// OBJ files loaded concurrently at build time; empty means the demo's own.
     std::vector<std::string> objPaths;
 };
