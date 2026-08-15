@@ -128,7 +128,11 @@ rolling resistance in the loop.
 **Assets** — a hand-written OBJ parser (all four face index forms, negative
 indices, polygon fan triangulation, vertex welding, generated normals) plus
 generated primitives. Batch loads parse concurrently and register in a
-deterministic order.
+deterministic order. The text is walked in place rather than through
+`getline`/`sscanf`, and corners are welded through an open-addressed table
+instead of an `unordered_map`, which is worth **700 MB/s** against the 130 MB/s
+the stream version managed: a 16.5 MB, 230,400 triangle mesh parses in 23.6 ms
+(9.8 M triangles/s, 460,800 corners welded down to 115,921 vertices).
 
 **Serialization** — a versioned binary format that writes each registered pool
 verbatim. Entity ids, including generations and holes, survive a round trip;
