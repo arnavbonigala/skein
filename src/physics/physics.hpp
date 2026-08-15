@@ -21,10 +21,18 @@ struct PhysicsSettings {
     bool useBounds = true;
     Vec3 boundsMin{-60, 0, -60};
     Vec3 boundsMax{60, 120, 60};
-    /// Four is what a stack of turned boxes needs: a box face is held by four
-    /// contact points at once and two passes leave the pair still sinking.
-    /// Spheres converge at two.
-    int solverIterations = 4;
+    /// Iterations per solver substep. Two is where a column of boxes stops
+    /// leaning: substeps alone reach the same total sweeps and do not, because
+    /// a sweep with nothing before it in the same substep has no news to pass
+    /// down the column.
+    int solverIterations = 2;
+    /// Times the velocity solve is stepped within one frame, reusing the
+    /// contacts the narrowphase already found and re-deriving how deep each of
+    /// them is from where the bodies have moved to since. Substeps and
+    /// iterations cost the same per sweep and neither replaces the other: a
+    /// stack of turned boxes that stands at four substeps of two iterations
+    /// falls over at one substep of eight and at eight substeps of one.
+    int solverSubsteps = 4;
     /// Upper bound on how many times a step may be split when a body would
     /// otherwise cross a collider between two tests. 1 disables splitting.
     int maxSubsteps = 4;
@@ -122,10 +130,16 @@ private:
         /// solver is on, but computing it is a few adds inside a test that has
         /// already found everything it needs.
         Vec3 point;
+        /// The same touching point as an arm from each body's centre, taken
+        /// when the pair was found. Turned by whatever the body has turned
+        /// since, these follow the surface through the substeps instead of
+        /// staying where the narrowphase left them.
+        Vec3 anchorA, anchorB;
     };
 
     void gather(Scene& scene);
-    void integrate(float dt, JobSystem* jobs);
+    void integrateVelocities(float dt, JobSystem* jobs);
+    void integratePositions(float dt, JobSystem* jobs);
     void buildGrid(JobSystem* jobs);
     void findContacts(JobSystem* jobs);
     void colorContacts();
@@ -133,6 +147,7 @@ private:
     void solveBounds(size_t begin, size_t end, float invDt);
     float boundsReach(size_t i, int axis) const;
     void warmStart(uint32_t begin, uint32_t end);
+    void applyRestitution(uint32_t begin, uint32_t end);
     void loadCachedImpulses(JobSystem* jobs);
     void storeCachedImpulses(JobSystem* jobs);
     void resolve(float dt, JobSystem* jobs);
@@ -154,6 +169,9 @@ private:
     std::vector<float> invInertia_;
     std::vector<Vec3> pseudo_;
     std::vector<Vec3> pseudoSpin_;
+    /// How far each body has moved and turned since the contacts were found,
+    /// which is what turns a fixed contact list into a live one.
+    std::vector<Quat> spinDelta_;
     std::vector<Vec3> halfExtent_;
     std::vector<float> radius_;
     std::vector<float> invMass_;
@@ -205,6 +223,7 @@ private:
     float cell_ = 2.0f;
     float maxReach_ = 0.0f;
     std::vector<float> sweep_;
+    std::vector<float> motion_;
     float stepDt_ = 0.0f;
     float minThin_ = 0.0f;
     float maxSpeed2_ = 0.0f;

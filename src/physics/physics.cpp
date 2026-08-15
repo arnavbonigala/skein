@@ -29,11 +29,15 @@ constexpr float kRollingFriction = 0.25f;
 /// corners that lift by that much leaves it standing on two points and tipping
 /// further. The solver already reads a point above the surface as a bound on
 /// approach rather than an overlap, so keeping them costs nothing.
-constexpr float kManifoldSkin = 0.02f;
+constexpr float kManifoldSkin = 0.05f;
 /// Overlap a sleeping body refuses to tolerate.
 // ponytail: absolute, not relative to body size; scale it by radius if scenes
 // ever mix boulders with pebbles.
 constexpr float kWakeDepth = 0.05f;
+/// How deep a body may still be when it is allowed to fall asleep. Tighter than
+/// the depth that wakes a sleeper: a sleeper stops being pushed out, so it keeps
+/// whatever overlap it had, and the solver settles well under this given frames.
+constexpr float kSleepDepth = 0.015f;
 /// How often sleeping bodies are measured against each other again.
 constexpr uint64_t kSleepAudit = 16;
 namespace {
@@ -393,7 +397,7 @@ void PhysicsWorld::gather(Scene& scene) {
     meanReach_ = m == 0 ? 0.0f : static_cast<float>(reachSum / static_cast<double>(m));
 }
 
-void PhysicsWorld::integrate(float dt, JobSystem* jobs) {
+void PhysicsWorld::integrateVelocities(float dt, JobSystem* jobs) {
     SKEIN_PROFILE("physics/integrate");
     size_t n = position_.size();
     const Vec3 g = settings.gravity;
@@ -405,12 +409,34 @@ void PhysicsWorld::integrate(float dt, JobSystem* jobs) {
             if (asleep_[i]) continue;
             if (invMass_[i] > 0.0f) velocity_[i] += g * dt;
             velocity_[i] *= damp;
-            position_[i] += velocity_[i] * dt;
+            if (angular) angular_[i] *= spinDamp;
+        }
+    };
+    if (jobs && n >= 4096)
+        jobs->parallelFor(n, 4096, body);
+    else
+        body(0, n);
+}
+
+void PhysicsWorld::integratePositions(float dt, JobSystem* jobs) {
+    SKEIN_PROFILE("physics/integrate");
+    size_t n = position_.size();
+    const bool angular = settings.angularContacts;
+    auto body = [&](size_t begin, size_t end) {
+        for (size_t i = begin; i < end; ++i) {
+            if (asleep_[i]) continue;
+            const Vec3 step = velocity_[i] * dt;
+            position_[i] += step;
             if (!angular) continue;
-            angular_[i] *= spinDamp;
             float speed = length(angular_[i]);
-            if (speed > 1e-6f)
-                orientation_[i] = normalize(Quat::axisAngle(angular_[i] / speed, speed * dt) * orientation_[i]);
+            if (speed > 1e-6f) {
+                Quat turn = Quat::axisAngle(angular_[i] / speed, speed * dt);
+                orientation_[i] = normalize(turn * orientation_[i]);
+                // What the contact anchors have to be turned by. Kept as its
+                // own quaternion so a contact never needs the orientation the
+                // narrowphase saw, only the difference.
+                spinDelta_[i] = normalize(turn * spinDelta_[i]);
+            }
         }
     };
     if (jobs && n >= 4096)
@@ -433,6 +459,7 @@ void PhysicsWorld::buildGrid(JobSystem* jobs) {
     const float inv = 1.0f / cell_;
 
     sweep_.resize(n);
+    motion_.resize(n);
     bodyLo_.resize(n * 3);
     bodyHi_.resize(n * 3);
     entryOffset_.resize(n + 1);
@@ -454,6 +481,10 @@ void PhysicsWorld::buildGrid(JobSystem* jobs) {
                     ? std::clamp(length(velocity_[i]) * stepDt_ - reach_[i], 0.0f, cell_)
                     : 0.0f;
             sweep_[i] = sweep;
+            // The grid is built where the bodies are now and the solve moves
+            // them afterwards, so the narrowphase has to accept a pair that is
+            // still apart by as much as the step will close.
+            motion_[i] = length(velocity_[i]) * stepDt_;
             const float r = reach_[i] + sweep;
             uint32_t span = 1;
             for (int axis = 0; axis < 3; ++axis) {
@@ -572,6 +603,12 @@ void PhysicsWorld::findContacts(JobSystem* jobs) {
         }
         if (boxA && boxB) {
             if (rotated_[i] || rotated_[j]) {
+                // Fifteen axes is a lot to spend on a pair the three world axes
+                // already separate, and the grid hands the narrowphase plenty of
+                // those: the cell scan only knows the pair is within reach.
+                Vec3 gap = vabs(position_[j] - position_[i]);
+                for (int axis = 0; axis < 3; ++axis)
+                    if (gap[axis] > boundsReach(i, axis) + boundsReach(j, axis) + margin) return 0;
                 static const Vec3 world[3] = {{1, 0, 0}, {0, 1, 0}, {0, 0, 1}};
                 const Vec3* axa = rotated_[i] ? &axis_[i * 3] : world;
                 const Vec3* axb = rotated_[j] ? &axis_[j * 3] : world;
@@ -613,18 +650,34 @@ void PhysicsWorld::findContacts(JobSystem* jobs) {
             nrm[axis] = d[axis] < 0 ? -1.0f : 1.0f;
             out.normal = nrm;
             out.depth = overlap[axis] - margin;
-            // Middle of the overlap slab on the separating axis, and the middle
-            // of the shared span on the other two: one point standing in for a
-            // face contact, which is what makes a stack of boxes settle flat
-            // instead of pivoting about a corner.
-            Vec3 p;
+            // The corners of the rectangle the two faces share, on the plane
+            // halfway through the overlap. A single point in the middle of that
+            // rectangle holds the pair apart just as well but does nothing to
+            // stop it pivoting, and a box resting on one point tips.
+            float lo[3], hi[3];
             for (int k = 0; k < 3; ++k) {
-                float loA = position_[i][k] - halfExtent_[i][k], hiA = position_[i][k] + halfExtent_[i][k];
-                float loB = position_[j][k] - halfExtent_[j][k], hiB = position_[j][k] + halfExtent_[j][k];
-                p[k] = 0.5f * (std::max(loA, loB) + std::min(hiA, hiB));
+                lo[k] = std::max(position_[i][k] - halfExtent_[i][k], position_[j][k] - halfExtent_[j][k]);
+                hi[k] = std::min(position_[i][k] + halfExtent_[i][k], position_[j][k] + halfExtent_[j][k]);
+                if (lo[k] > hi[k]) lo[k] = hi[k] = 0.5f * (lo[k] + hi[k]);
             }
-            out.point = p;
-            return 1;
+            const int u = (axis + 1) % 3, v = (axis + 2) % 3;
+            const float plane = 0.5f * (lo[axis] + hi[axis]);
+            // A rectangle thinner than the slop is an edge or a corner, and its
+            // duplicate corners would each apply the whole contact impulse.
+            const float wide = hi[u] - lo[u] > kSlop, deep = hi[v] - lo[v] > kSlop;
+            int count = 0;
+            for (int cu = 0; cu < (wide ? 2 : 1); ++cu)
+                for (int cv = 0; cv < (deep ? 2 : 1); ++cv) {
+                    Vec3 p;
+                    p[axis] = plane;
+                    p[u] = cu ? hi[u] : lo[u];
+                    p[v] = cv ? hi[v] : lo[v];
+                    manifold[count] = out;
+                    manifold[count].point = p;
+                    manifold[count].id = static_cast<uint32_t>(1 + cu * 2 + cv);
+                    ++count;
+                }
+            return count;
         }
         size_t s = boxA ? j : i;
         size_t b = boxA ? i : j;
@@ -713,7 +766,7 @@ void PhysicsWorld::findContacts(JobSystem* jobs) {
                             if (!audit) continue;
                             Contact probe[4];
                             probe[0] = Contact{i, j, Vec3{0, 1, 0}, 0, 0, Vec3{0, 0, 0}};
-                            if (narrowAll(i, j, probe, 0.0f) > 0 && probe[0].depth > kWakeDepth) {
+                            if (narrowAll(i, j, probe, 0.0f) > 0 && probe[0].depth > kSleepDepth) {
                                 // The timer has to go back with the flag: this
                                 // pair contributes no contact this step, so
                                 // nothing else would stop the sleep test at the
@@ -734,7 +787,7 @@ void PhysicsWorld::findContacts(JobSystem* jobs) {
                         }
                         Contact manifold[4];
                         manifold[0] = Contact{i, j, Vec3{0, 1, 0}, 0, 0, Vec3{0, 0, 0}};
-                        int found = narrowAll(i, j, manifold, sweep_[i] + sweep_[j]);
+                        int found = narrowAll(i, j, manifold, motion_[i] + motion_[j] + kManifoldSkin);
                         if (found == 0) continue;
                         const Contact& contact = manifold[0];
                         // Only a body that is actually moving wakes a sleeper,
@@ -747,7 +800,11 @@ void PhysicsWorld::findContacts(JobSystem* jobs) {
                             std::atomic_ref<uint8_t>(asleep_[i]).store(0, std::memory_order_relaxed);
                         if (asleep_[j] && (deep || length2(velocity_[i]) > wakeSpeed2))
                             std::atomic_ref<uint8_t>(asleep_[j]).store(0, std::memory_order_relaxed);
-                        for (int m = 0; m < found; ++m) sink.push_back(manifold[m]);
+                        for (int m = 0; m < found; ++m) {
+                            manifold[m].anchorA = manifold[m].point - position_[i];
+                            manifold[m].anchorB = manifold[m].point - position_[j];
+                            sink.push_back(manifold[m]);
+                        }
                     }
                 }
                 runStart = runEnd;
@@ -820,8 +877,14 @@ void PhysicsWorld::solveRange(uint32_t begin, uint32_t end, bool positional, flo
         if (imSum <= 0.0f) continue;
         const float iiA = angular ? invInertia_[c.a] : 0.0f;
         const float iiB = angular ? invInertia_[c.b] : 0.0f;
-        const Vec3 rA = angular ? c.point - position_[c.a] : Vec3{0, 0, 0};
-        const Vec3 rB = angular ? c.point - position_[c.b] : Vec3{0, 0, 0};
+        // Where the touching point is now: the arm the narrowphase measured,
+        // turned by however far the body has turned since. A stack settles by
+        // rotating a few degrees, and an arm left pointing where the pair used
+        // to touch resolves the wrong constraint by exactly that much.
+        const Vec3 armA = rotate(spinDelta_[c.a], c.anchorA);
+        const Vec3 armB = rotate(spinDelta_[c.b], c.anchorB);
+        const Vec3 rA = angular ? armA : Vec3{0, 0, 0};
+        const Vec3 rB = angular ? armB : Vec3{0, 0, 0};
         // Velocity of the touching points, not of the centres: an impulse at
         // arm's length is what turns a glancing hit into a spin.
         auto pointVel = [&](uint32_t body, const Vec3& r, float ii) {
@@ -842,14 +905,17 @@ void PhysicsWorld::solveRange(uint32_t begin, uint32_t end, bool positional, flo
         Vec3 rel = pointVel(c.b, rB, iiB) - pointVel(c.a, rA, iiA);
         float vn = dot(rel, c.normal);
         const float normalMass = angular ? effMass(c.normal) : imSum;
+        // How deep the pair is *now*, not when the narrowphase looked: the
+        // bodies have been moving between substeps, and a constraint that keeps
+        // answering with the depth it was born with is solving last position's
+        // problem.
+        const float depth = c.depth - dot((position_[c.b] + armB) - (position_[c.a] + armA), c.normal);
 
-        // The bounce target is fixed before the first iteration, or accumulating
-        // impulses would cancel the restitution back out on the next pass.
         // A contact across a gap does not forbid approach, it bounds it: the
         // pair may close exactly the distance between them and no more, which
         // lands the body on the surface instead of inside it or past it.
-        float separation = c.depth < 0.0f ? -c.depth * invDt : 0.0f;
-        float lambda = -(vn - restitutionBias_[k] + separation) / normalMass;
+        float separation = depth < 0.0f ? -depth * invDt : 0.0f;
+        float lambda = -(vn + separation) / normalMass;
         // The accumulated impulse is what can be clamped against zero and
         // carried into the next frame; a per-iteration impulse cannot.
         float& total = normalImpulse_[k];
@@ -897,12 +963,12 @@ void PhysicsWorld::solveRange(uint32_t begin, uint32_t end, bool positional, flo
         if (positional) {
             // Contacts are colour-partitioned, so a body is touched by at most
             // one contact per pass and this needs no atomics.
-            deepest_[c.a] = std::max(deepest_[c.a], c.depth);
-            deepest_[c.b] = std::max(deepest_[c.b], c.depth);
+            deepest_[c.a] = std::max(deepest_[c.a], depth);
+            deepest_[c.b] = std::max(deepest_[c.b], depth);
             // Split impulse: the depth correction moves bodies apart through a
             // separate pseudo velocity that is integrated into position and
             // then dropped, so pushing an overlap out never feeds real motion.
-            float target = std::min(std::max(c.depth - kSlop, 0.0f) * kCorrection * invDt, kMaxSeparation);
+            float target = std::min(std::max(depth - kSlop, 0.0f) * kCorrection * invDt, kMaxSeparation);
             // The push has to be able to turn the body as well as move it: a box
             // resting on one deep corner is separated by rotating about the
             // others, and a solver that can only translate lifts it off them
@@ -986,7 +1052,12 @@ void PhysicsWorld::loadCachedImpulses(JobSystem* jobs) {
                                                : velocity_[ci.b];
             float vn = dot(pb - pa, ci.normal);
             float approach = std::max(-vn, foundApproach);
-            if (contacts_[i].depth < 0.0f) {
+            // The bounce is spent on the step the pair actually meets, which is
+            // not the step they overlap on: a solver that stops the body exactly
+            // at the surface never produces an overlap to trigger it. The gap it
+            // will close this step is what says they meet.
+            const bool meets = ci.depth >= 0.0f || -ci.depth <= std::max(approach, 0.0f) * stepDt_;
+            if (!meets) {
                 restitutionBias_[i] = 0.0f;
                 approach_[i] = approach;
             } else {
@@ -1111,12 +1182,52 @@ void PhysicsWorld::solveBounds(size_t begin, size_t end, float invDt) {
     }
 }
 
+// Bounce is applied once, after the substeps have finished pressing the pair
+// apart. Mixed into the substep solve it fights its own output: the substep
+// that answered the bounce sees the body leaving and winds the impulse it just
+// applied back down to stop it.
+void PhysicsWorld::applyRestitution(uint32_t begin, uint32_t end) {
+    const bool angular = settings.angularContacts;
+    for (uint32_t idx = begin; idx < end; ++idx) {
+        const uint32_t k = colorOrder_[idx];
+        if (restitutionBias_[k] <= 1e-4f || normalImpulse_[k] <= 0.0f) continue;
+        const Contact& c = contacts_[k];
+        float imA = invMass_[c.a], imB = invMass_[c.b];
+        float imSum = imA + imB;
+        if (imSum <= 0.0f) continue;
+        const float iiA = angular ? invInertia_[c.a] : 0.0f;
+        const float iiB = angular ? invInertia_[c.b] : 0.0f;
+        const Vec3 rA = angular ? c.point - position_[c.a] : Vec3{0, 0, 0};
+        const Vec3 rB = angular ? c.point - position_[c.b] : Vec3{0, 0, 0};
+        Vec3 va = iiA > 0.0f ? velocity_[c.a] + cross(angular_[c.a], rA) : velocity_[c.a];
+        Vec3 vb = iiB > 0.0f ? velocity_[c.b] + cross(angular_[c.b], rB) : velocity_[c.b];
+        float vn = dot(vb - va, c.normal);
+        if (vn > restitutionBias_[k]) continue;
+        Vec3 ca = cross(rA, c.normal), cb = cross(rB, c.normal);
+        float normalMass = imSum + iiA * length2(ca) + iiB * length2(cb);
+        float lambda = -(vn - restitutionBias_[k]) / normalMass;
+        float& total = normalImpulse_[k];
+        float previous = total;
+        total = std::max(previous + lambda, 0.0f);
+        float applied = total - previous;
+        if (applied == 0.0f) continue;
+        const Vec3 j = c.normal * applied;
+        if (imA > 0.0f) velocity_[c.a] -= j * imA;
+        if (imB > 0.0f) velocity_[c.b] += j * imB;
+        if (iiA > 0.0f) angular_[c.a] -= cross(rA, j) * iiA;
+        if (iiB > 0.0f) angular_[c.b] += cross(rB, j) * iiB;
+    }
+}
+
 void PhysicsWorld::resolve(float dt, JobSystem* jobs) {
     SKEIN_PROFILE("physics/solve");
     pseudo_.assign(position_.size(), Vec3{0, 0, 0});
     pseudoSpin_.assign(position_.size(), Vec3{0, 0, 0});
     deepest_.assign(position_.size(), 0.0f);
-    const float invDt = dt > 1e-6f ? 1.0f / dt : 0.0f;
+    spinDelta_.assign(position_.size(), Quat{});
+    const int substeps = std::max(1, settings.solverSubsteps);
+    const float h = dt / static_cast<float>(substeps);
+    const float invDt = h > 1e-6f ? 1.0f / h : 0.0f;
     loadCachedImpulses(jobs);
     // Warm starting has to be its own pass over every contact. Folded into the
     // first solve iteration it does nothing at all: solving a contact right
@@ -1133,7 +1244,37 @@ void PhysicsWorld::resolve(float dt, JobSystem* jobs) {
         else
             warmStart(begin, end);
     }
-    for (int iter = 0; iter < std::max(1, settings.solverIterations); ++iter) {
+    // The positional push is collected across every substep and spent once, at
+    // the end of the step. Applied and cleared per substep it is a quarter of
+    // the push and a stack of spheres sinks through itself over a few hundred
+    // frames.
+    auto applyPseudo = [&](float sdt) {
+        const bool angular = settings.angularContacts;
+        auto pass = [&](size_t begin, size_t end) {
+            for (size_t i = begin; i < end; ++i) {
+                // A sleeper stays exactly where it was when it fell asleep;
+                // nudging it is how two sleeping bodies end up merged with
+                // nothing to part them.
+                if (asleep_[i]) continue;
+                position_[i] += pseudo_[i] * sdt;
+                if (angular) {
+                    float spin = length(pseudoSpin_[i]);
+                    if (spin > 1e-8f)
+                        orientation_[i] = normalize(
+                            Quat::axisAngle(pseudoSpin_[i] / spin, spin * sdt) * orientation_[i]);
+                }
+                pseudo_[i] = Vec3{0, 0, 0};
+                pseudoSpin_[i] = Vec3{0, 0, 0};
+            }
+        };
+        if (jobs && position_.size() >= 8192)
+            jobs->parallelFor(position_.size(), 4096, pass);
+        else
+            pass(0, position_.size());
+    };
+    for (int sub = 0; sub < substeps; ++sub) {
+      integrateVelocities(h, jobs);
+      for (int iter = 0; iter < std::max(1, settings.solverIterations); ++iter) {
         const bool positional = true;
         if (settings.useBounds) {
             if (jobs && position_.size() >= 8192)
@@ -1153,28 +1294,17 @@ void PhysicsWorld::resolve(float dt, JobSystem* jobs) {
                 solveRange(begin, end, positional, invDt);
         }
         solveRange(colorStart_[SERIAL_COLOR], colorStart_[SERIAL_COLOR + 1], positional, invDt);
+      }
+      integratePositions(h, jobs);
     }
 
-    if (settings.warmStart) storeCachedImpulses(jobs);
+    for (uint32_t color = 0; color <= colorCount_; ++color) {
+        uint32_t slot = color == colorCount_ ? SERIAL_COLOR : color;
+        applyRestitution(colorStart_[slot], colorStart_[slot + 1]);
+    }
 
-    auto applyPseudo = [&](size_t begin, size_t end) {
-        // A sleeper stays exactly where it was when it fell asleep; nudging it
-        // is how two sleeping bodies end up merged with nothing to part them.
-        const bool angular = settings.angularContacts;
-        for (size_t i = begin; i < end; ++i) {
-            if (asleep_[i]) continue;
-            position_[i] += pseudo_[i] * dt;
-            if (!angular) continue;
-            float spin = length(pseudoSpin_[i]);
-            if (spin > 1e-8f)
-                orientation_[i] =
-                    normalize(Quat::axisAngle(pseudoSpin_[i] / spin, spin * dt) * orientation_[i]);
-        }
-    };
-    if (jobs && position_.size() >= 8192)
-        jobs->parallelFor(position_.size(), 4096, applyPseudo);
-    else
-        applyPseudo(0, position_.size());
+    applyPseudo(dt);
+    if (settings.warmStart) storeCachedImpulses(jobs);
 
     if (!settings.useBounds) return;
     auto clampToBounds = [&](size_t begin, size_t end) {
@@ -1214,7 +1344,7 @@ void PhysicsWorld::updateSleep(float dt, JobSystem* jobs) {
             // A body still buried in something has not come to rest, however
             // still it looks: freezing it there would leave the overlap
             // permanent, since sleepers no longer push each other apart.
-            const bool separating = deepest_[i] > kWakeDepth;
+            const bool separating = deepest_[i] > kSleepDepth;
             // Spin has to count, or a body left rotating in place is declared
             // asleep and then frozen mid-turn.
             const float spin2 = settings.angularContacts ? length2(angular_[i]) * reach_[i] * reach_[i] : 0.0f;
@@ -1305,7 +1435,6 @@ PhysicsStats PhysicsWorld::step(Scene& scene, float dt, JobSystem* jobs) {
     const float h = dt / static_cast<float>(substeps);
     stepDt_ = h;
     for (uint32_t s = 0; s < substeps; ++s) {
-        integrate(h, jobs);
         buildGrid(jobs);
         findContacts(jobs);
         colorContacts();
