@@ -1,5 +1,6 @@
 #include <lua.hpp>
 
+#include <vector>
 #include <cstdio>
 
 #include "assets/mesh.hpp"
@@ -323,6 +324,22 @@ int l_raycast(lua_State* L) {
     return 5;
 }
 
+/// `skein.overlap_sphere(x, y, z, radius)` -> array of entities.
+int l_overlapSphere(lua_State* L) {
+    PhysicsWorld* physics = host(L).physics();
+    lua_newtable(L);
+    if (!physics) return 1;
+    Vec3 center{static_cast<float>(luaL_checknumber(L, 1)), static_cast<float>(luaL_checknumber(L, 2)),
+                static_cast<float>(luaL_checknumber(L, 3))};
+    std::vector<Entity> found;
+    physics->overlapSphere(center, static_cast<float>(luaL_checknumber(L, 4)), found);
+    for (size_t i = 0; i < found.size(); ++i) {
+        lua_pushinteger(L, static_cast<lua_Integer>(found[i]));
+        lua_rawseti(L, -2, static_cast<lua_Integer>(i + 1));
+    }
+    return 1;
+}
+
 const luaL_Reg API[] = {
     {"spawn", l_spawn},
     {"destroy", l_destroy},
@@ -342,6 +359,7 @@ const luaL_Reg API[] = {
     {"add_material", l_addMaterial},
     {"on_update", l_onUpdate},
     {"raycast", l_raycast},
+    {"overlap_sphere", l_overlapSphere},
     {"time", l_time},
     {"log", l_log},
     {nullptr, nullptr},

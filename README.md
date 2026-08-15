@@ -31,7 +31,7 @@ Requires CMake 3.20, a C++20 compiler, Lua and (for the interactive demo) GLFW.
 brew install cmake lua glfw
 cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
 cmake --build build -j
-./build/skein_tests     # 79 tests
+./build/skein_tests     # 81 tests
 ./build/skein_bench     # headless CPU benchmark
 ./build/skein_bench --sweep   # plus the 25k to 1M scaling sweep
 ./build/skein_demo      # interactive window
@@ -130,7 +130,9 @@ and stops as soon as the nearest hit lies inside the cell it is walking, since a
 body is registered in every cell it overlaps and a closer hit would have been
 found in a cell already visited. 4,096 rays into the 30,000-body field cost
 **0.38 µs each** (2.65 M rays/s) against 80.6 µs for testing every body — 213x.
-A test checks 400 random rays against an O(n) reference.
+A test checks 400 random rays against an O(n) reference. `overlapSphere`
+answers area queries off the same grid, and both are bound into Lua as
+`skein.raycast` and `skein.overlap_sphere`.
 
 Bodies are linear only: spheres and axis-aligned boxes, no angular velocity and
 no rotated box collisions. Friction therefore acts as sliding friction on a
@@ -449,7 +451,7 @@ objects drop out, `O` pauses, `P` dumps the frame profile, `V` toggles vsync,
 
 ## Tests
 
-79 tests, no framework. They cover the parts where being wrong is quiet: the
+81 tests, no framework. They cover the parts where being wrong is quiet: the
 hashed grid must return exactly the brute-force contact set even when collider
 sizes vary 70x, the coloured parallel solver must land bitwise on the serial
 result, a stack of eight spheres must still be standing after ten seconds, a

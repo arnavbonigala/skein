@@ -520,6 +520,25 @@ int main(int argc, char** argv) {
                    brutePerRay / gridPerRay, brutRays, bruteHits));
     }
 
+    {
+        std::mt19937 rng(99);
+        std::uniform_real_distribution<float> place(-20.0f, 20.0f);
+        std::vector<Vec3> centers;
+        for (int i = 0; i < 1024; ++i) centers.push_back(Vec3{place(rng), place(rng) * 0.5f + 12.0f, place(rng)});
+        std::vector<Entity> found;
+        size_t hits = 0;
+        Timing t = measure(2, 20, [&] {
+            hits = 0;
+            for (const Vec3& c : centers) {
+                found.clear();
+                demo.physics.overlapSphere(c, 3.0f, found);
+                hits += found.size();
+            }
+        });
+        row("1,024 sphere overlaps, radius 3", t.median,
+            format("%.2f us per query, %zu bodies returned", t.median * 1000.0 / 1024.0, hits));
+    }
+
     heading("frustum culling and batching");
     demo.scene.updateTransforms(&jobs);
     Frustum frustum = extractFrustum(benchViewProj());

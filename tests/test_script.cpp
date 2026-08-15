@@ -227,3 +227,29 @@ TEST(lua_can_raycast_the_world_it_spawned) {
     CHECK(lua_isnil(L, -1));
     lua_pop(L, 1);
 }
+
+TEST(lua_overlap_sphere_lists_nearby_bodies) {
+    Harness h;
+    h.run(R"(
+        a = skein.spawn{position = {0, 0, 0}, collider = {radius = 0.5}}
+        b = skein.spawn{position = {1.0, 0, 0}, collider = {radius = 0.5}}
+        c = skein.spawn{position = {40, 0, 0}, collider = {radius = 0.5}}
+    )");
+    h.physics.settings.gravity = Vec3{0, 0, 0};
+    h.physics.settings.useBounds = false;
+    h.physics.step(h.scene, 0.0f, nullptr);
+
+    h.run(R"(
+        near = skein.overlap_sphere(0.5, 0, 0, 0.4)
+        count = #near
+        empty = #skein.overlap_sphere(0, 80, 0, 2)
+    )");
+
+    lua_State* L = h.script.state();
+    lua_getglobal(L, "count");
+    CHECK_EQ(static_cast<int>(lua_tointeger(L, -1)), 2);
+    lua_pop(L, 1);
+    lua_getglobal(L, "empty");
+    CHECK_EQ(static_cast<int>(lua_tointeger(L, -1)), 0);
+    lua_pop(L, 1);
+}

@@ -91,6 +91,10 @@ public:
     /// be normalised. Returns a miss when the world has not been stepped yet.
     RayHit raycast(const Vec3& origin, const Vec3& dir, float maxDistance) const;
 
+    /// Every collider overlapping the sphere, appended to `out`. Same grid and
+    /// same caveat as `raycast`: it answers for the last step's positions.
+    void overlapSphere(const Vec3& center, float radius, std::vector<Entity>& out) const;
+
     const PhysicsStats& stats() const { return stats_; }
     size_t bytesUsed() const;
 

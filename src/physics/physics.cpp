@@ -1032,6 +1032,46 @@ RayHit PhysicsWorld::raycast(const Vec3& origin, const Vec3& dir, float maxDista
     return hit;
 }
 
+void PhysicsWorld::overlapSphere(const Vec3& center, float radius, std::vector<Entity>& out) const {
+    if (entries_.empty() || radius <= 0.0f) return;
+    const float inv = 1.0f / cell_;
+    int32_t lo[3], hi[3];
+    for (int axis = 0; axis < 3; ++axis) {
+        lo[axis] = static_cast<int32_t>(std::floor((center[axis] - radius) * inv));
+        hi[axis] = static_cast<int32_t>(std::floor((center[axis] + radius) * inv));
+    }
+    // A body spanning several cells appears once per cell it covers, so the
+    // same entity can be met more than once; the run is short and the check is
+    // a scan of what was just appended rather than a set.
+    const size_t first = out.size();
+    for (int32_t z = lo[2]; z <= hi[2]; ++z)
+        for (int32_t y = lo[1]; y <= hi[1]; ++y)
+            for (int32_t x = lo[0]; x <= hi[0]; ++x) {
+                const uint64_t key = packCell(x, y, z);
+                const uint32_t bucket = hashCell(x, y, z) & bucketMask_;
+                for (uint32_t i = cellStart_[bucket]; i < cellStart_[bucket + 1]; ++i) {
+                    const GridEntry& e = entries_[i];
+                    if (e.cell != key) continue;
+                    const uint32_t b = e.body;
+                    bool overlaps;
+                    if (kind_[b] == static_cast<uint32_t>(ColliderKind::Sphere)) {
+                        float sum = radius + radius_[b];
+                        overlaps = length2(position_[b] - center) < sum * sum;
+                    } else {
+                        Vec3 d = center - position_[b];
+                        Vec3 clamped{std::clamp(d.x, -halfExtent_[b].x, halfExtent_[b].x),
+                                     std::clamp(d.y, -halfExtent_[b].y, halfExtent_[b].y),
+                                     std::clamp(d.z, -halfExtent_[b].z, halfExtent_[b].z)};
+                        overlaps = length2(d - clamped) < radius * radius;
+                    }
+                    if (!overlaps) continue;
+                    Entity found = entity_[b];
+                    if (std::find(out.begin() + static_cast<ptrdiff_t>(first), out.end(), found) == out.end())
+                        out.push_back(found);
+                }
+            }
+}
+
 size_t PhysicsWorld::bytesUsed() const {
     auto bytes = [](const auto& v) { return v.capacity() * sizeof(typename std::decay_t<decltype(v)>::value_type); };
     size_t total = bytes(entity_) + bytes(position_) + bytes(velocity_) + bytes(pseudo_) + bytes(halfExtent_) +

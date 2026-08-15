@@ -662,3 +662,46 @@ TEST(a_fast_bouncy_body_rebounds_at_the_speed_it_arrived_with) {
     CHECK(fastestUp > 0.5f * 80.0f);
     CHECK(scene.world.get<Transform>(ball).position.y > 0.8f);
 }
+
+TEST(overlap_sphere_matches_brute_force) {
+    std::mt19937 rng(555);
+    std::uniform_real_distribution<float> p(-18.0f, 18.0f);
+    std::uniform_real_distribution<float> r(0.3f, 1.4f);
+
+    Scene scene;
+    std::vector<Vec3> centers;
+    std::vector<float> radii;
+    std::vector<Entity> ids;
+    for (int i = 0; i < 2000; ++i) {
+        Vec3 pos{p(rng), p(rng), p(rng)};
+        float rad = r(rng);
+        centers.push_back(pos);
+        radii.push_back(rad);
+        ids.push_back(spawnSphere(scene, pos, Vec3{0, 0, 0}, rad, 0.0f));
+    }
+
+    PhysicsWorld physics;
+    physics.settings.gravity = Vec3{0, 0, 0};
+    physics.settings.useBounds = false;
+    physics.step(scene, 0.0f, nullptr);
+
+    std::vector<Entity> found;
+    size_t totalFound = 0;
+    for (int q = 0; q < 60; ++q) {
+        Vec3 center{p(rng), p(rng), p(rng)};
+        float radius = 1.0f + static_cast<float>(q % 5);
+
+        std::set<Entity> expected;
+        for (size_t b = 0; b < centers.size(); ++b) {
+            float sum = radius + radii[b];
+            if (length2(centers[b] - center) < sum * sum) expected.insert(ids[b]);
+        }
+
+        found.clear();
+        physics.overlapSphere(center, radius, found);
+        CHECK_EQ(found.size(), expected.size());
+        for (Entity e : found) CHECK(expected.count(e) == 1);
+        totalFound += found.size();
+    }
+    CHECK(totalFound > 100);
+}
