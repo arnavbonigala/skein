@@ -130,6 +130,23 @@ struct Pool final : IPool {
         dense.clear();
         data.clear();
     }
+
+    /// Rewrites the dense arrays so slot i holds what slot order[i] held. The
+    /// sparse map absorbs the move, so handles stay valid and callers are free
+    /// to choose an iteration order that suits them.
+    void permute(const std::vector<uint32_t>& order, std::vector<Entity>& denseScratch,
+                 std::vector<T>& dataScratch) {
+        if (order.size() != dense.size()) return;
+        denseScratch.resize(dense.size());
+        dataScratch.resize(data.size());
+        for (size_t i = 0; i < order.size(); ++i) {
+            denseScratch[i] = dense[order[i]];
+            dataScratch[i] = std::move(data[order[i]]);
+        }
+        dense.swap(denseScratch);
+        data.swap(dataScratch);
+        for (size_t i = 0; i < dense.size(); ++i) sparse[entityIndex(dense[i])] = static_cast<uint32_t>(i);
+    }
 };
 
 /// Registry of every component type ever registered, keyed by stable name for serialization.

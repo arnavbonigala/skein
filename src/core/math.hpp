@@ -338,6 +338,22 @@ inline bool frustumIntersectsAABB(const Frustum& f, const Vec3& center, const Ve
     return true;
 }
 
+enum class FrustumFit { Outside, Straddling, Inside };
+
+/// Full classification rather than a yes/no, so a caller holding a group of
+/// objects can accept or reject the whole group without touching its members.
+inline FrustumFit frustumClassifyAABB(const Frustum& f, const Vec3& center, const Vec3& extent) {
+    bool inside = true;
+    for (int i = 0; i < 6; ++i) {
+        const Plane& p = f.planes[i];
+        float r = extent.x * std::fabs(p.n.x) + extent.y * std::fabs(p.n.y) + extent.z * std::fabs(p.n.z);
+        float s = dot(p.n, center) + p.d;
+        if (s < -r) return FrustumFit::Outside;
+        if (s < r) inside = false;
+    }
+    return inside ? FrustumFit::Inside : FrustumFit::Straddling;
+}
+
 inline bool frustumIntersectsSphere(const Frustum& f, const Vec3& center, float radius) {
     for (int i = 0; i < 6; ++i)
         if (f.planes[i].distance(center) < -radius) return false;

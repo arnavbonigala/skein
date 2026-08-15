@@ -176,6 +176,38 @@ int main(int argc, char** argv) {
     row("job system", frameParallel.median,
         format("%.0f fps ceiling, ", 1000.0 / frameParallel.median) + speedup(frameSerial.median, frameParallel.median));
 
+    heading("spatial clustering vs flat culling");
+    {
+        CullSystem flat;
+        flat.useClusters = false;
+        RenderList flatList;
+        Timing flatTime = measure(3, iterations, [&] { flat.build(demo.scene, frustum, 6, flatList, &jobs, true); });
+
+        CullSystem clusteredCuller;
+        clusteredCuller.sortSpatially(demo.scene);
+        demo.scene.updateTransforms(&jobs);
+        RenderList clusteredList;
+        Timing sortedTime =
+            measure(3, iterations, [&] { clusteredCuller.build(demo.scene, frustum, 6, clusteredList, &jobs, true); });
+        const CullStats& cs = clusteredCuller.stats();
+
+        row("flat, one test per object", flatTime.median, perEntity(flatTime.median, flatList.totalCandidates));
+        row("clustered over morton order", sortedTime.median,
+            perEntity(sortedTime.median, clusteredList.totalCandidates) + "  " +
+                speedup(flatTime.median, sortedTime.median));
+        fact("agreement", format("%u visible both ways", clusteredList.visible) +
+                              (clusteredList.visible == flatList.visible ? "" : "  MISMATCH"));
+        fact("clusters", format("%u of %u objects, %u outside, %u inside, %u straddling", cs.clusters,
+                                clusteredList.totalCandidates, cs.clustersOutside, cs.clustersInside,
+                                cs.clustersStraddling));
+        fact("subclusters", format("%u of 16 objects each, %u outside, %u inside, %u straddling",
+                                   cs.subclusters, cs.subclustersOutside, cs.subclustersInside,
+                                   cs.subclustersStraddling));
+        fact("objects individually tested",
+             format("%u of %u, %.1f%% resolved by their cluster", cs.objectsTested, clusteredList.totalCandidates,
+                    100.0 * (1.0 - static_cast<double>(cs.objectsTested) / clusteredList.totalCandidates)));
+    }
+
     heading("frame phase breakdown (job system)");
     {
         Profiler& profiler = Profiler::instance();

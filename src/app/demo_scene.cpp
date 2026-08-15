@@ -68,9 +68,16 @@ void Demo::build(const DemoConfig& cfg, JobSystem* jobs) {
     std::uniform_real_distribution<float> pilePlanar(-pileExtent, pileExtent);
     std::uniform_real_distribution<float> pileVertical(1.0f, cfg.fieldHeight * 0.55f);
 
+    // Renderables are spread across the whole entity range rather than taken
+    // from the front, so the visible set covers both the dense simulated pile
+    // and the wide scattered field instead of sitting entirely inside one.
+    const int renderStride = std::max(1, cfg.entityCount / std::max(1, cfg.renderableCount));
+    int rendered = 0;
+
     for (int i = 0; i < cfg.entityCount; ++i) {
         Transform t;
         const bool simulated = i < cfg.colliderCount;
+        const bool visible = (i % renderStride) == 0 && rendered < cfg.renderableCount;
         t.position = simulated ? Vec3{pilePlanar(rng), pileVertical(rng), pilePlanar(rng)}
                                : Vec3{planar(rng), vertical(rng), planar(rng)};
         float s = 0.6f + unit(rng) * 1.6f;
@@ -82,7 +89,8 @@ void Demo::build(const DemoConfig& cfg, JobSystem* jobs) {
             e, Velocity{Vec3{signedUnit(rng) * 3.0f, signedUnit(rng) * 2.0f, signedUnit(rng) * 3.0f},
                         Vec3{signedUnit(rng) * 0.8f, signedUnit(rng) * 1.2f, signedUnit(rng) * 0.8f}});
 
-        if (i < cfg.renderableCount) {
+        if (visible) {
+            ++rendered;
             uint32_t mesh = meshIds_[static_cast<size_t>(rng() % meshIds_.size())];
             uint32_t material = static_cast<uint32_t>(rng() % assets.materialCount());
             scene.world.add<Renderable>(e, Renderable{mesh, material, 1, 0});

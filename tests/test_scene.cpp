@@ -289,3 +289,52 @@ TEST(unknown_component_pools_are_skipped_not_fatal) {
     CHECK_EQ(target.world.pool<Renderable>().size(), size_t{0});
     CHECK_EQ(target.world.pool<Transform>().size(), size_t{1});
 }
+
+TEST(spatial_clustering_matches_the_flat_cull_and_skips_most_objects) {
+    Scene scene;
+    std::mt19937 rng(404);
+    std::uniform_real_distribution<float> p(-140.0f, 140.0f);
+    std::vector<Entity> spawned;
+    for (int i = 0; i < 30000; ++i) {
+        Entity e = scene.create(trs(Vec3{p(rng), p(rng), p(rng)}));
+        scene.world.add<Renderable>(e, Renderable{static_cast<uint32_t>(i % 4), static_cast<uint32_t>(i % 3), 1, 0});
+        CullBounds cb;
+        cb.localExtent = Vec3{0.6f, 0.6f, 0.6f};
+        scene.world.add<CullBounds>(e, cb);
+        spawned.push_back(e);
+    }
+
+    JobSystem jobs(4);
+    scene.updateTransforms(&jobs);
+    Mat4 vp = perspective(radians(55.0f), 16.0f / 9.0f, 0.5f, 260.0f) *
+              lookAt(Vec3{0, 40, 130}, Vec3{0, 0, 0}, Vec3{0, 1, 0});
+    Frustum f = extractFrustum(vp);
+
+    CullSystem flat;
+    flat.useClusters = false;
+    RenderList flatList;
+    flat.build(scene, f, 3, flatList, &jobs);
+
+    CullSystem clustered;
+    clustered.sortSpatially(scene);
+    scene.updateTransforms(&jobs);
+    RenderList clusteredList;
+    clustered.build(scene, f, 3, clusteredList, &jobs);
+
+    CHECK_EQ(clusteredList.visible, flatList.visible);
+    CHECK_EQ(clusteredList.totalCandidates, flatList.totalCandidates);
+
+    const CullStats& s = clustered.stats();
+    CHECK(s.clustersInside > 0);
+    CHECK(s.clustersOutside > 0);
+    CHECK(s.objectsTested < flatList.totalCandidates / 2);
+
+    // Sorting permutes the pools, so every handle must still resolve.
+    for (Entity e : spawned) {
+        CHECK(scene.world.tryGet<CullBounds>(e) != nullptr);
+        CHECK(scene.world.tryGet<Renderable>(e) != nullptr);
+    }
+    Pool<CullBounds>& bounds = scene.world.pool<CullBounds>();
+    for (size_t i = 0; i < bounds.dense.size(); ++i)
+        CHECK(scene.world.tryGet<CullBounds>(bounds.dense[i]) == &bounds.data[i]);
+}
