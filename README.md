@@ -88,7 +88,11 @@ rehashing each body's cells and filtering foreign entries out of the bucket
 (narrowphase 5.11 ms → 1.98 ms on the benchmark scene). Pairs are deduped by
 reporting only from the lowest cell two bodies share. The solver colours the contact graph greedily (64 colours, one bitmask
 per body) and runs each colour in parallel; a test asserts the parallel result
-is bitwise identical to the serial one over 90 steps of a 4,000-body pile.
+is bitwise identical to the serial one over 90 steps of a 4,000-body pile. The
+counting sort that assigns the colours moves the contacts themselves rather than
+building an index array, so the eight sweeps a step read a stride instead of a
+gather — worth 9% of the whole step, since each contact touched five more arrays
+at the same scattered index.
 
 **Physics** — SoA gather/scatter around a hashed uniform grid built with a
 counting sort, a cell-run scan that verifies real cell coordinates to reject
