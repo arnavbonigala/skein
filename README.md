@@ -31,7 +31,7 @@ Requires CMake 3.20, a C++20 compiler, Lua and (for the interactive demo) GLFW.
 brew install cmake lua glfw
 cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
 cmake --build build -j
-./build/skein_tests     # 91 tests
+./build/skein_tests     # 96 tests
 ./build/skein_bench     # headless CPU benchmark
 ./build/skein_bench --sweep   # plus the 25k to 1M scaling sweep
 ./build/skein_demo      # interactive window
@@ -176,6 +176,21 @@ a ball needs it because its contact point is stationary and sliding friction
 never reaches it, while a box face is already held by the four points friction
 acts at, so spending it there only torques the stack. Neither is enough alone.
 A column of eight boxes stands only with both removed.
+
+**Joints** — a `Joint` component holds two bodies a fixed distance apart between
+an anchor on each, solved by the same accumulated-impulse machinery as contacts
+and warm started the same way. Length error is not folded into that impulse as a
+bias term: the impulse is carried between frames, so a bias inside it replays
+last frame's correction on top of this frame's and a hanging chain climbs above
+its own anchor within five seconds. The error goes through the split-impulse
+channel the contacts already use instead, and the chain then holds its rest
+length exactly. Compliance is exposed as metres of stretch per newton-second,
+folded in XPBD-style as mass the constraint does not have, so a rope that should
+sag is a number rather than a retune. Four hundred twelve-link ropes are where
+warm starting earns its keep hardest: the top joint carries eleven links of load
+and only hears about it one joint per sweep, so solving from nothing each step
+leaves the free end **116.7 mm** below rest against **0.2 mm** warm started, for
+6% less time.
 
 **Substeps** — the step is solved in four substeps of two iterations rather than
 in one pass of eight. A substep integrates velocity, sweeps the contacts, and
@@ -511,7 +526,7 @@ objects drop out, `O` pauses, `P` dumps the frame profile, `V` toggles vsync,
 
 ## Tests
 
-91 tests, no framework. They cover the parts where being wrong is quiet: the
+96 tests, no framework. They cover the parts where being wrong is quiet: the
 hashed grid must return exactly the brute-force contact set even when collider
 sizes vary 70x, the coloured parallel solver must land bitwise on the serial
 result, a stack of eight spheres must still be standing after ten seconds, a
@@ -525,7 +540,8 @@ eight turned boxes must all still be standing after ten seconds, a slab must tum
 over end at least five times more readily than it spins about its own length,
 a skidding ball must end up rolling and then stop, clustered
 culling must keep exactly the objects the flat path keeps and
-must re-sort only once motion has actually loosened the order, a
+must re-sort only once motion has actually loosened the order, a chain of joints must hang at its rest length rather than
+stretch or climb and must still do so after being saved and loaded, a
 2,000-entity hierarchy with destroyed parents must survive a serialization
 round trip, threaded transform updates must match single-threaded ones bit for
 bit, and `parallelFor` must cover every index exactly once under nesting.
