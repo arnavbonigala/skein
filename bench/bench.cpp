@@ -1207,7 +1207,8 @@ int main(int argc, char** argv) {
         CullSystem morton;
         morton.sortSpatially(demo.scene);
         RenderList flatList, mortonList;
-        std::printf("  %-38s %9s %11s %9s %8s\n", "camera", "flat", "morton", "speedup", "visible");
+        std::printf("  %-38s %9s %11s %9s %8s %8s\n", "camera", "flat", "morton", "speedup", "visible",
+                    "tested");
         struct Shot {
             const char* label;
             Vec3 eye;
@@ -1227,9 +1228,10 @@ int main(int argc, char** argv) {
                                        lookAt(shot.eye, shot.at, Vec3{0, 1, 0}));
             Timing ft = measure(3, iterations, [&] { flat.build(demo.scene, f, 6, flatList, &jobs, true); });
             Timing mt = measure(3, iterations, [&] { morton.build(demo.scene, f, 6, mortonList, &jobs, true); });
-            std::printf("  %-38s %7.3fms %9.3fms %8s %7.1f%%%s\n", shot.label, ft.median, mt.median,
+            std::printf("  %-38s %7.3fms %9.3fms %8s %7.1f%% %7.1f%%%s\n", shot.label, ft.median, mt.median,
                         speedup(ft.median, mt.median).c_str(),
                         100.0 * mortonList.visible / std::max(mortonList.totalCandidates, 1u),
+                        100.0 * morton.stats().objectsTested / std::max(mortonList.totalCandidates, 1u),
                         mortonList.visible == flatList.visible ? "" : "  MISMATCH");
         }
     }
