@@ -31,7 +31,7 @@ Requires CMake 3.20, a C++20 compiler, Lua and (for the interactive demo) GLFW.
 brew install cmake lua glfw
 cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
 cmake --build build -j
-./build/skein_tests     # 81 tests
+./build/skein_tests     # 84 tests
 ./build/skein_bench     # headless CPU benchmark
 ./build/skein_bench --sweep   # plus the 25k to 1M scaling sweep
 ./build/skein_demo      # interactive window
@@ -134,10 +134,25 @@ A test checks 400 random rays against an O(n) reference. `overlapSphere`
 answers area queries off the same grid, and both are bound into Lua as
 `skein.raycast` and `skein.overlap_sphere`.
 
-Bodies are linear only: spheres and axis-aligned boxes, no angular velocity and
-no rotated box collisions. Friction therefore acts as sliding friction on a
-sphere that never spins, which is why piles settle flatter than they would with
-rolling resistance in the loop.
+Contacts are solved at the point the pair touches, not through the two centres,
+so an impulse applied at arm's length spins the body it lands on and the
+orientation it produces goes back onto the `Transform`. The effective mass of a
+contact therefore includes how much the pair resists being rotated there, and
+friction resolves along the direction the surfaces are actually sliding in.
+Inertia is one scalar per body rather than a rotated tensor, which is what holds
+the whole addition to about a tenth of the step.
+
+Sliding friction cannot slow a ball that is already rolling: its contact point
+is stationary, so there is nothing left for friction to act on and a pile of
+spheres jostles forever without ever going still. Contacts and walls therefore
+spend a bounded fraction of their normal impulse against the pair's relative
+spin, which is what lets a rolling body come to rest and the pile sleep at all.
+A test drives a ball across the floor and checks it stops skidding, starts
+rolling, and eventually stops — without the motion ever running backwards.
+
+Collision shapes are still spheres and axis-aligned boxes: a box rotates under a
+contact but is tested against its axis-aligned extent, so the narrowphase does
+not see the turn.
 
 **Assets** — a hand-written OBJ parser (all four face index forms, negative
 indices, polygon fan triangulation, vertex welding, generated normals) plus
@@ -455,14 +470,16 @@ objects drop out, `O` pauses, `P` dumps the frame profile, `V` toggles vsync,
 
 ## Tests
 
-81 tests, no framework. They cover the parts where being wrong is quiet: the
+84 tests, no framework. They cover the parts where being wrong is quiet: the
 hashed grid must return exactly the brute-force contact set even when collider
 sizes vary 70x, the coloured parallel solver must land bitwise on the serial
 result, a stack of eight spheres must still be standing after ten seconds, a
 pile that has gone to sleep must be no more interpenetrated than one that has
 not and must wake when a script throws it somewhere else, a body crossing
 twelve times its own radius in one step must not end up on the far side of a
-wall, clustered culling must keep exactly the objects the flat path keeps and
+wall, an off-centre hit must spin the body it lands on while a hit through the
+centres must not, a skidding ball must end up rolling and then stop, clustered
+culling must keep exactly the objects the flat path keeps and
 must re-sort only once motion has actually loosened the order, a
 2,000-entity hierarchy with destroyed parents must survive a serialization
 round trip, threaded transform updates must match single-threaded ones bit for
