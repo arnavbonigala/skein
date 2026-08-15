@@ -602,6 +602,10 @@ void PhysicsWorld::resolve(float dt, JobSystem* jobs) {
     deepest_.assign(position_.size(), 0.0f);
     const float invDt = dt > 1e-6f ? 1.0f / dt : 0.0f;
     loadCachedImpulses(jobs);
+    // Warm starting has to be its own pass over every contact. Folded into the
+    // first solve iteration it does nothing at all: solving a contact right
+    // after replaying its impulse overwrites exactly what was replayed, and the
+    // benefit comes from the *other* contacts already being loaded.
     for (uint32_t color = 0; settings.warmStart && color <= colorCount_; ++color) {
         uint32_t begin = colorStart_[color == colorCount_ ? SERIAL_COLOR : color];
         uint32_t end = colorStart_[(color == colorCount_ ? SERIAL_COLOR : color) + 1];
