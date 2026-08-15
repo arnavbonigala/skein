@@ -429,6 +429,29 @@ TEST(a_fast_body_does_not_pass_through_a_thin_wall) {
     PhysicsWorld physics;
     physics.settings.useBounds = false;
     physics.settings.gravity = Vec3{0, 0, 0};
+    for (int i = 0; i < 30; ++i) physics.step(scene, 1.0f / 60.0f, nullptr);
+
+    CHECK(scene.world.get<Transform>(bullet).position.y > 0.2f);
+}
+
+TEST(a_discrete_solver_needs_substeps_for_the_same_wall) {
+    Scene scene;
+    Transform wallT;
+    Entity wall = scene.create(wallT);
+    Collider wc;
+    wc.kind = static_cast<uint32_t>(ColliderKind::Box);
+    wc.halfExtents = Vec3{4.0f, 0.25f, 4.0f};
+    wc.invMass = 0.0f;
+    scene.world.add<Collider>(wall, wc);
+    scene.world.add<Velocity>(wall, Velocity{});
+
+    Entity bullet = spawnSphere(scene, Vec3{0, 3.0f, 0}, Vec3{0, -120.0f, 0}, 0.2f);
+
+    PhysicsWorld physics;
+    physics.settings.useBounds = false;
+    physics.settings.gravity = Vec3{0, 0, 0};
+    physics.settings.speculativeContacts = false;
+    physics.settings.maxSubsteps = 32;
     uint32_t worstSplit = 0;
     for (int i = 0; i < 30; ++i)
         worstSplit = std::max(worstSplit, physics.step(scene, 1.0f / 60.0f, nullptr).substeps);

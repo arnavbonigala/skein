@@ -189,6 +189,7 @@ void PhysicsWorld::buildGrid(JobSystem* jobs) {
     stats_.cellSize = cell_;
     const float inv = 1.0f / cell_;
 
+    sweep_.resize(n);
     bodyLo_.resize(n * 3);
     bodyHi_.resize(n * 3);
     entryOffset_.resize(n + 1);
@@ -196,7 +197,21 @@ void PhysicsWorld::buildGrid(JobSystem* jobs) {
     auto classify = [&](size_t begin, size_t end) {
         for (size_t i = begin; i < end; ++i) {
             const Vec3 p = position_[i];
-            const float r = reach_[i];
+            // A body is registered as wide as it needs to be for a pair it will
+            // meet during the step to already share a cell with it. Only the
+            // part of the motion its own extent does not already cover counts:
+            // a pair is missed when it crosses more than the two extents put
+            // together, so reach + max(0, motion - reach) per side is still a
+            // bound and costs a slow body nothing. The clamp is what the
+            // substep count is derived from: past one cell of motion the
+            // inflation would spread one body over the whole grid, and
+            // splitting the step is cheaper.
+            const float sweep =
+                settings.speculativeContacts
+                    ? std::clamp(length(velocity_[i]) * stepDt_ - reach_[i], 0.0f, cell_)
+                    : 0.0f;
+            sweep_[i] = sweep;
+            const float r = reach_[i] + sweep;
             uint32_t span = 1;
             for (int axis = 0; axis < 3; ++axis) {
                 int32_t lo = static_cast<int32_t>(std::floor((p[axis] - r) * inv));
@@ -252,7 +267,7 @@ void PhysicsWorld::buildGrid(JobSystem* jobs) {
         e.x = position_[i].x;
         e.y = position_[i].y;
         e.z = position_[i].z;
-        e.reach = reach_[i];
+        e.reach = reach_[i] + sweep_[i];
         e.body = static_cast<uint32_t>(i);
         e.awake = asleep_[i] ? 0u : 1u;
         uint32_t k = entryOffset_[i];
@@ -290,14 +305,18 @@ void PhysicsWorld::findContacts(JobSystem* jobs) {
     std::atomic<uint64_t> near{0};
     std::atomic<uint64_t> duplicates{0};
 
-    auto narrow = [&](size_t i, size_t j, Contact& out) -> bool {
+    // `margin` is how far apart the pair may still be and count: the distance
+    // they can close before the next test. A contact found across a gap carries
+    // a negative depth, and the solver reads that as "may approach this far".
+    auto narrow = [&](size_t i, size_t j, Contact& out, float margin) -> bool {
         bool boxA = kind_[i] == static_cast<uint32_t>(ColliderKind::Box);
         bool boxB = kind_[j] == static_cast<uint32_t>(ColliderKind::Box);
         if (!boxA && !boxB) {
             Vec3 d = position_[j] - position_[i];
             float rsum = radius_[i] + radius_[j];
+            float reach = rsum + margin;
             float dist2 = length2(d);
-            if (dist2 >= rsum * rsum || dist2 < 1e-12f) return false;
+            if (dist2 >= reach * reach || dist2 < 1e-12f) return false;
             float dist = std::sqrt(dist2);
             out.normal = d / dist;
             out.depth = rsum - dist;
@@ -305,13 +324,13 @@ void PhysicsWorld::findContacts(JobSystem* jobs) {
         }
         if (boxA && boxB) {
             Vec3 d = position_[j] - position_[i];
-            Vec3 overlap = (halfExtent_[i] + halfExtent_[j]) - vabs(d);
+            Vec3 overlap = (halfExtent_[i] + halfExtent_[j] + Vec3{margin, margin, margin}) - vabs(d);
             if (overlap.x <= 0 || overlap.y <= 0 || overlap.z <= 0) return false;
             int axis = overlap.x < overlap.y ? (overlap.x < overlap.z ? 0 : 2) : (overlap.y < overlap.z ? 1 : 2);
             Vec3 nrm{0, 0, 0};
             nrm[axis] = d[axis] < 0 ? -1.0f : 1.0f;
             out.normal = nrm;
-            out.depth = overlap[axis];
+            out.depth = overlap[axis] - margin;
             return true;
         }
         size_t s = boxA ? j : i;
@@ -323,7 +342,8 @@ void PhysicsWorld::findContacts(JobSystem* jobs) {
         Vec3 delta = rel - clamped;
         float dist2 = length2(delta);
         float r = radius_[s];
-        if (dist2 >= r * r) return false;
+        float reach = r + margin;
+        if (dist2 >= reach * reach) return false;
         Vec3 nrm;
         float depth;
         if (dist2 < 1e-12f) {
@@ -391,7 +411,7 @@ void PhysicsWorld::findContacts(JobSystem* jobs) {
                         if (asleep_[i] && asleep_[j]) {
                             if (!audit) continue;
                             Contact probe{i, j, Vec3{0, 1, 0}, 0};
-                            if (narrow(i, j, probe) && probe.depth > kWakeDepth) {
+                            if (narrow(i, j, probe, 0.0f) && probe.depth > kWakeDepth) {
                                 // The timer has to go back with the flag: this
                                 // pair contributes no contact this step, so
                                 // nothing else would stop the sleep test at the
@@ -411,7 +431,7 @@ void PhysicsWorld::findContacts(JobSystem* jobs) {
                             continue;
                         }
                         Contact contact{i, j, Vec3{0, 1, 0}, 0};
-                        if (!narrow(i, j, contact)) continue;
+                        if (!narrow(i, j, contact, sweep_[i] + sweep_[j])) continue;
                         // Only a body that is actually moving wakes a sleeper,
                         // or one jittering body would cascade through a settled
                         // pile and wake all of it. An overlap deep enough to
@@ -497,7 +517,11 @@ void PhysicsWorld::solveRange(uint32_t begin, uint32_t end, bool positional, flo
 
         // The bounce target is fixed before the first iteration, or accumulating
         // impulses would cancel the restitution back out on the next pass.
-        float lambda = -(vn - restitutionBias_[k]) / imSum;
+        // A contact across a gap does not forbid approach, it bounds it: the
+        // pair may close exactly the distance between them and no more, which
+        // lands the body on the surface instead of inside it or past it.
+        float separation = c.depth < 0.0f ? -c.depth * invDt : 0.0f;
+        float lambda = -(vn - restitutionBias_[k] + separation) / imSum;
         // The accumulated impulse is what can be clamped against zero and
         // carried into the next frame; a per-iteration impulse cannot.
         float& total = normalImpulse_[k];
@@ -832,13 +856,18 @@ PhysicsStats PhysicsWorld::step(Scene& scene, float dt, JobSystem* jobs) {
     if (settings.maxSubsteps > 1 && minThin_ > 0.0f) {
         // A pair is still caught as long as the mover ends the step inside the
         // other body's extent, so the bound is the sum of the two thinnest
-        // half-extents in the world, not one of them.
+        // half-extents in the world, not one of them. Speculative contacts
+        // raise that bound to a whole grid cell, because a body inflated by its
+        // own motion cannot pass anything without sharing a cell with it first.
+        float bound = 2.0f * minThin_;
+        if (settings.speculativeContacts) bound = std::max(bound, cell_);
         float motion = std::sqrt(maxSpeed2_) * dt;
-        substeps = static_cast<uint32_t>(std::ceil(motion / (2.0f * minThin_)));
+        substeps = static_cast<uint32_t>(std::ceil(motion / bound));
         substeps = std::clamp(substeps, 1u, static_cast<uint32_t>(settings.maxSubsteps));
     }
     stats_.substeps = substeps;
     const float h = dt / static_cast<float>(substeps);
+    stepDt_ = h;
     for (uint32_t s = 0; s < substeps; ++s) {
         integrate(h, jobs);
         buildGrid(jobs);

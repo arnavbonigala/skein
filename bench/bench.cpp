@@ -194,6 +194,23 @@ int main(int argc, char** argv) {
                                static_cast<unsigned long long>(ps.nearPairs),
                                static_cast<unsigned long long>(ps.duplicatePairs), ps.contacts));
     {
+        // Speculative contacts widen every moving body by the distance it
+        // covers in a step, which is a real broadphase cost on a scene that has
+        // no tunnelling to prevent. This is that cost.
+        demo.physics.settings.speculativeContacts = false;
+        Timing discrete = measure(3, iterations / 2, [&] { demo.physics.step(demo.scene, 1.0f / 60.0f, &jobs); });
+        uint64_t discretePairs = demo.physics.stats().pairsTested;
+        demo.physics.settings.speculativeContacts = true;
+        Timing spec = measure(3, iterations / 2, [&] { demo.physics.step(demo.scene, 1.0f / 60.0f, &jobs); });
+        row("speculative contacts off", discrete.median,
+            format("%llu pairs tested", static_cast<unsigned long long>(discretePairs)));
+        row("speculative contacts on", spec.median,
+            format("%llu pairs tested, %+.1f%% of the discrete pair count",
+                   static_cast<unsigned long long>(demo.physics.stats().pairsTested),
+                   100.0 * (static_cast<double>(demo.physics.stats().pairsTested) /
+                            static_cast<double>(std::max<uint64_t>(discretePairs, 1)) - 1.0)));
+    }
+    {
         double allPairs = 0.5 * static_cast<double>(ps.bodies) * static_cast<double>(ps.bodies - 1);
         fact("broadphase pruning",
              format("%.0fx fewer than all-pairs (%.2e)",
@@ -374,12 +391,13 @@ int main(int argc, char** argv) {
     {
         // Speed, not body count, is what a fixed step misses: a body that
         // crosses the wall between two tests is never tested against it.
-        auto volley = [&](int maxSubsteps) {
+        auto volley = [&](int maxSubsteps, bool speculative) {
             Scene scene;
             PhysicsWorld world;
             world.settings.useBounds = false;
             world.settings.gravity = Vec3{0, 0, 0};
             world.settings.maxSubsteps = maxSubsteps;
+            world.settings.speculativeContacts = speculative;
             Transform wallT;
             Entity wall = scene.create(wallT);
             Collider wc;
@@ -413,8 +431,13 @@ int main(int argc, char** argv) {
             return std::make_tuple(t.median, through, worstSplit);
         };
         for (int cap : {1, 4, 16}) {
-            auto [ms, through, split] = volley(cap);
-            row(format("400 shots, 20 to 220 m/s, cap %2d", cap).c_str(), ms,
+            auto [ms, through, split] = volley(cap, false);
+            row(format("discrete, cap %2d", cap).c_str(), ms,
+                format("%3d of 400 passed through the wall, up to %u substeps", through, split));
+        }
+        for (int cap : {1, 4}) {
+            auto [ms, through, split] = volley(cap, true);
+            row(format("speculative, cap %2d", cap).c_str(), ms,
                 format("%3d of 400 passed through the wall, up to %u substeps", through, split));
         }
         fact("why the tightest cap is not the slowest",

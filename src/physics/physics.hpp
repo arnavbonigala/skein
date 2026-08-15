@@ -28,6 +28,11 @@ struct PhysicsSettings {
     /// Reuse each contact's accumulated impulse next frame. Off is the naive
     /// solver, kept so the benchmark can measure what warm starting buys.
     bool warmStart = true;
+    /// Widen a moving body by the distance it covers this step and let contacts
+    /// form across the gap, so an approach is stopped at the surface instead of
+    /// being discovered after it has already gone through. Off is the naive
+    /// discrete test, kept so the benchmark can measure the difference.
+    bool speculativeContacts = true;
     /// Coulomb friction coefficient shared by every contact.
     /// ponytail: global, move onto Collider when materials need to differ.
     float friction = 0.4f;
@@ -144,6 +149,8 @@ private:
     uint64_t frame_ = 0;
     float cell_ = 2.0f;
     float maxReach_ = 0.0f;
+    std::vector<float> sweep_;
+    float stepDt_ = 0.0f;
     float minThin_ = 0.0f;
     float maxSpeed2_ = 0.0f;
     float meanReach_ = 0.0f;
