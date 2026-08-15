@@ -486,6 +486,32 @@ TEST(a_discrete_solver_needs_substeps_for_the_same_wall) {
     CHECK(scene.world.get<Transform>(bullet).position.y > 0.2f);
 }
 
+TEST(a_discrete_solver_without_substeps_lets_the_bullet_through) {
+    // The negative control for the two tests above. Without it, a speculative
+    // tolerance leaking into the discrete path reads as both of them passing
+    // while the setting that is supposed to switch it off does nothing.
+    Scene scene;
+    Transform wallT;
+    Entity wall = scene.create(wallT);
+    Collider wc;
+    wc.kind = static_cast<uint32_t>(ColliderKind::Box);
+    wc.halfExtents = Vec3{4.0f, 0.25f, 4.0f};
+    wc.invMass = 0.0f;
+    scene.world.add<Collider>(wall, wc);
+    scene.world.add<Velocity>(wall, Velocity{});
+
+    Entity bullet = spawnSphere(scene, Vec3{0, 3.0f, 0}, Vec3{0, -120.0f, 0}, 0.2f);
+
+    PhysicsWorld physics;
+    physics.settings.useBounds = false;
+    physics.settings.gravity = Vec3{0, 0, 0};
+    physics.settings.speculativeContacts = false;
+    physics.settings.maxSubsteps = 1;
+    for (int i = 0; i < 30; ++i) physics.step(scene, 1.0f / 60.0f, nullptr);
+
+    CHECK(scene.world.get<Transform>(bullet).position.y < -1.0f);
+}
+
 TEST(raycast_finds_the_same_nearest_body_as_brute_force) {
     std::mt19937 rng(77);
     std::uniform_real_distribution<float> p(-20.0f, 20.0f);
