@@ -82,7 +82,7 @@ private:
     void solveBounds(size_t begin, size_t end, float invDt);
     void warmStart(uint32_t begin, uint32_t end);
     void loadCachedImpulses(JobSystem* jobs);
-    void storeCachedImpulses();
+    void storeCachedImpulses(JobSystem* jobs);
     void resolve(float dt, JobSystem* jobs);
     void updateSleep(float dt, JobSystem* jobs);
     void scatter(Scene& scene, JobSystem* jobs);

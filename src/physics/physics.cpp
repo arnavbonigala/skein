@@ -521,19 +521,38 @@ void PhysicsWorld::loadCachedImpulses(JobSystem* jobs) {
         body(0, n);
 }
 
-void PhysicsWorld::storeCachedImpulses() {
+void PhysicsWorld::storeCachedImpulses(JobSystem* jobs) {
     SKEIN_PROFILE("physics/impulseStore");
     const size_t n = contacts_.size();
     uint32_t slots = std::max(nextPow2(static_cast<uint32_t>(n) * 2 + 1), 64u);
     cacheMask_ = slots - 1;
-    cache_.assign(slots, CacheSlot{});
-    for (size_t i = 0; i < n; ++i) {
-        if (normalImpulse_[i] <= 0.0f) continue;
-        uint64_t key = contactKey_[i];
-        uint32_t slot = static_cast<uint32_t>(key) & cacheMask_;
-        while (cache_[slot].key != 0 && cache_[slot].key != key) slot = (slot + 1) & cacheMask_;
-        cache_[slot].key = key;
-        cache_[slot].impulse = normalImpulse_[i];
+    cache_.resize(slots);
+    auto clear = [&](size_t begin, size_t end) {
+        for (size_t i = begin; i < end; ++i) cache_[i] = CacheSlot{};
+    };
+    // Claiming a slot with a compare-exchange is all the synchronisation an
+    // insert-only table needs, so the whole pass runs on the job system.
+    auto insert = [&](size_t begin, size_t end) {
+        for (size_t i = begin; i < end; ++i) {
+            if (normalImpulse_[i] <= 0.0f) continue;
+            uint64_t key = contactKey_[i];
+            for (uint32_t slot = static_cast<uint32_t>(key) & cacheMask_;; slot = (slot + 1) & cacheMask_) {
+                std::atomic_ref<uint64_t> cell(cache_[slot].key);
+                uint64_t empty = 0;
+                if (cell.load(std::memory_order_relaxed) == key ||
+                    cell.compare_exchange_strong(empty, key, std::memory_order_relaxed)) {
+                    cache_[slot].impulse = normalImpulse_[i];
+                    break;
+                }
+            }
+        }
+    };
+    if (jobs && n >= 8192) {
+        jobs->parallelFor(slots, 8192, clear);
+        jobs->parallelFor(n, 4096, insert);
+    } else {
+        clear(0, slots);
+        insert(0, n);
     }
 }
 
@@ -616,7 +635,7 @@ void PhysicsWorld::resolve(float dt, JobSystem* jobs) {
         solveRange(colorStart_[SERIAL_COLOR], colorStart_[SERIAL_COLOR + 1], positional, invDt);
     }
 
-    if (settings.warmStart) storeCachedImpulses();
+    if (settings.warmStart) storeCachedImpulses(jobs);
 
     auto applyPseudo = [&](size_t begin, size_t end) {
         // A sleeper stays exactly where it was when it fell asleep; nudging it
