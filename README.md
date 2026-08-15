@@ -31,7 +31,7 @@ Requires CMake 3.20, a C++20 compiler, Lua and (for the interactive demo) GLFW.
 brew install cmake lua glfw
 cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
 cmake --build build -j
-./build/skein_tests     # 71 tests
+./build/skein_tests     # 72 tests
 ./build/skein_bench     # headless CPU benchmark
 ./build/skein_bench --sweep   # plus the 25k to 1M scaling sweep
 ./build/skein_demo      # interactive window
@@ -104,6 +104,14 @@ sinks through itself and the depth push papers over the result. Reusing last
 frame's impulse converges the same column in two iterations that otherwise
 needed thirty-two, which in turn is what lets a pile go still enough to sleep.
 
+A fixed step also misses whatever crosses a collider between two tests, so the
+step splits itself: each gather records the fastest body and the thinnest
+half-extent in the world, and the inner pipeline runs as many times as it takes
+for nothing to move further than the two thinnest bodies could hide behind,
+capped by `maxSubsteps` (4 by default, 1 to disable). The bound is global
+because the grid and the contact list are, and it costs nothing on a scene where
+nothing is fast — the benchmark field never triggers a split.
+
 Bodies are linear only: spheres and axis-aligned boxes, no angular velocity and
 no rotated box collisions. Friction therefore acts as sliding friction on a
 sphere that never spins, which is why piles settle flatter than they would with
@@ -142,18 +150,18 @@ table below.
 
 | Pass | 1 thread | 8 threads | Speedup |
 |---|---|---|---|
-| ECS iteration (100k integrate) | 0.691 ms — 6.9 ns/entity | 0.205 ms — 2.1 ns/entity | 3.37x |
-| Transform hierarchy (112k) | 0.762 ms — 6.8 ns/entity | 0.336 ms — 3.0 ns/entity | 2.27x |
-| Physics step (30k bodies, 63k contacts) | 16.67 ms — 556 ns/body | 6.95 ms — 232 ns/body | 2.40x |
-| Cull + batch (37k candidates) | 0.612 ms — 16.5 ns/object | 0.362 ms — 9.8 ns/object | 1.69x |
-| **Full simulation frame** | **18.78 ms (53 fps)** | **8.03 ms (125 fps)** | **2.34x** |
+| ECS iteration (100k integrate) | 0.700 ms — 7.0 ns/entity | 0.265 ms — 2.6 ns/entity | 2.64x |
+| Transform hierarchy (112k) | 0.819 ms — 7.3 ns/entity | 0.446 ms — 4.0 ns/entity | 1.84x |
+| Physics step (30k bodies, 63k contacts) | 16.78 ms — 560 ns/body | 7.95 ms — 265 ns/body | 2.11x |
+| Cull + batch (37k candidates) | 0.611 ms — 16.5 ns/object | 0.352 ms — 9.5 ns/object | 1.73x |
+| **Full simulation frame** | **18.69 ms (54 fps)** | **7.75 ms (129 fps)** | **2.41x** |
 
 Thread scaling on the full simulation frame:
 
 | Threads | 1 | 2 | 3 | 4 | 6 | 8 |
 |---|---|---|---|---|---|---|
-| ms | 17.47 | 10.26 | 7.94 | 6.64 | 7.03 | 6.98 |
-| speedup | 1.08x | 1.85x | 2.39x | 2.83x | 2.70x | 2.69x |
+| ms | 17.47 | 9.72 | 8.98 | 6.65 | 6.68 | 7.14 |
+| speedup | 1.07x | 1.92x | 2.08x | 2.81x | 2.80x | 2.62x |
 
 Scaling flattens past four threads because the M3's four efficiency cores are
 roughly a third the throughput of its performance cores, and because the
@@ -163,20 +171,20 @@ Where the frame actually goes, from the built-in profiler at 8 threads:
 
 | Zone | avg | p95 |
 |---|---|---|
-| physics/solve | 3.31 ms | 4.00 ms |
-| physics/narrowphase | 1.77 ms | 2.15 ms |
-| physics/broadphase | 0.90 ms | 0.98 ms |
-| scene/updateTransforms | 0.70 ms | 0.80 ms |
-| physics/gather | 0.58 ms | 0.61 ms |
-| physics/impulseStore | 0.34 ms | 0.43 ms |
+| physics/solve | 3.14 ms | 3.51 ms |
+| physics/narrowphase | 1.80 ms | 2.16 ms |
+| physics/broadphase | 0.92 ms | 1.07 ms |
+| scene/updateTransforms | 0.70 ms | 0.79 ms |
+| physics/impulseCache | 0.32 ms | 0.42 ms |
 | render/cull | 0.29 ms | 0.39 ms |
-| physics/impulseCache | 0.28 ms | 0.35 ms |
-| ecs/kinematics | 0.25 ms | 0.31 ms |
+| physics/gather | 0.27 ms | 0.28 ms |
 | physics/color | 0.25 ms | 0.27 ms |
-| physics/scatter | 0.10 ms | 0.14 ms |
-| physics/integrate | 0.05 ms | 0.09 ms |
-| physics/sleep | 0.04 ms | 0.08 ms |
-| render/clusterBounds | 0.04 ms | 0.07 ms |
+| ecs/kinematics | 0.25 ms | 0.33 ms |
+| physics/impulseStore | 0.22 ms | 0.29 ms |
+| physics/scatter | 0.10 ms | 0.15 ms |
+| physics/integrate | 0.05 ms | 0.08 ms |
+| render/clusterBounds | 0.04 ms | 0.08 ms |
+| physics/sleep | 0.04 ms | 0.06 ms |
 | render/batchSort | 0.04 ms | 0.07 ms |
 
 ### Cluster culling over Morton-ordered pools
@@ -296,11 +304,27 @@ saving is work, not parallelism:
 
 | Scene | Sleeping off | Sleeping on | |
 |---|---|---|---|
-| 4,000 in a box, 30 s to settle | 1.59 ms — 4,000 awake, 12,082 contacts | **0.35 ms** — 152 awake, 714 contacts | **4.55x** |
-| 30,000 demo field, still churning | 16.89 ms — 30,000 awake | 16.67 ms — 27,285 awake | 1.01x |
+| 4,000 in a box, 30 s to settle | 1.65 ms — 4,000 awake, 12,082 contacts | **0.30 ms** — 121 awake, 589 contacts | **5.52x** |
+| 30,000 demo field, still churning | 14.89 ms — 30,000 awake | 16.06 ms — 27,535 awake | 0.93x |
 
-The second row is the point of the first: a pile that never settles pays
-nothing for the feature it cannot use.
+The second row is the point of the first: a pile that never settles pays only
+the bookkeeping for a feature it cannot use.
+
+### Fast bodies against a thin wall
+
+400 spheres of radius 0.15 fired at 20 to 220 m/s at a 0.5 m thick static slab,
+which at the top speed is 3.7 m of travel in a 1/60 s step:
+
+| Substep cap | Step cost | Passed through |
+|---|---|---|
+| 1 (splitting off) | 0.035 ms | 292 of 400 |
+| 4 (the default) | 0.147 ms | 85 of 400 |
+| 16 | 0.047 ms | **0 of 400** |
+
+The tightest cap is not the slowest: a shot that stops at the wall stops needing
+splits, while every shot that escapes keeps moving fast enough to split every
+later step. Nothing in the 30,000-body benchmark field moves fast enough to
+split at all, so the default costs it nothing.
 
 ### Culling and broadphase effectiveness
 
@@ -350,12 +374,14 @@ objects drop out, `O` pauses, `P` dumps the frame profile, `V` toggles vsync,
 
 ## Tests
 
-71 tests, no framework. They cover the parts where being wrong is quiet: the
+72 tests, no framework. They cover the parts where being wrong is quiet: the
 hashed grid must return exactly the brute-force contact set even when collider
 sizes vary 70x, the coloured parallel solver must land bitwise on the serial
 result, a stack of eight spheres must still be standing after ten seconds, a
 pile that has gone to sleep must be no more interpenetrated than one that has
-not and must wake when a script throws it somewhere else, clustered culling must keep exactly the objects the flat path keeps and
+not and must wake when a script throws it somewhere else, a body crossing
+twelve times its own radius in one step must not end up on the far side of a
+wall, clustered culling must keep exactly the objects the flat path keeps and
 must re-sort only once motion has actually loosened the order, a
 2,000-entity hierarchy with destroyed parents must survive a serialization
 round trip, threaded transform updates must match single-threaded ones bit for
