@@ -1299,8 +1299,12 @@ void PhysicsWorld::applyRestitution(uint32_t begin, uint32_t end) {
         if (imSum <= 0.0f) continue;
         const float iiA = angular ? invInertia_[c.a] : 0.0f;
         const float iiB = angular ? invInertia_[c.b] : 0.0f;
-        const Vec3 rA = angular ? c.point - position_[c.a] : Vec3{0, 0, 0};
-        const Vec3 rB = angular ? c.point - position_[c.b] : Vec3{0, 0, 0};
+        // The arms the last substep prepared, not the ones the narrowphase
+        // measured: this runs after four substeps of motion, and a bounce
+        // applied through an arm pointing where the pair used to touch spins
+        // the body about the wrong point.
+        const Vec3 rA = angular ? armA_[k] : Vec3{0, 0, 0};
+        const Vec3 rB = angular ? armB_[k] : Vec3{0, 0, 0};
         Vec3 va = iiA > 0.0f ? velocity_[c.a] + cross(angular_[c.a], rA) : velocity_[c.a];
         Vec3 vb = iiB > 0.0f ? velocity_[c.b] + cross(angular_[c.b], rB) : velocity_[c.b];
         float vn = dot(vb - va, c.normal);
