@@ -329,10 +329,21 @@ split at all, so the default costs it nothing.
 ### Culling and broadphase effectiveness
 
 37,000 candidates against a 65° frustum: **25,230 kept, 11,770 rejected
-(31.8%)** in 0.36 ms. The broadphase is the same story at a different scale —
-30,000 densely piled bodies produce 1.88M candidate pairs instead of the
-4.5×10⁸ an all-pairs test would need, **230x fewer**, and 63,072 real contacts
-out of those.
+(31.8%)** in 0.35 ms. The broadphase is the same story at a different scale —
+30,000 densely piled bodies produce 1.99M candidate pairs instead of the
+4.5×10⁸ an all-pairs test would need, **226x fewer**. What happens to those
+1.99M is the whole design:
+
+| Stage | Pairs | Cost of the test |
+|---|---|---|
+| Tested in a shared cell | 1,993,119 | reads only the sorted entry array |
+| Within each other's reach | 257,427 (12.9%) | one distance compare |
+| Not another cell's to report | 106,481 | six ints from the body's cell range |
+| Real contacts | 61,892 | full sphere/box narrowphase |
+
+87% of the work is rejected before touching a body array at all, which is why
+the entry carries its own position and reach instead of an index to look one
+up.
 
 ### Rendering, before and after batching
 

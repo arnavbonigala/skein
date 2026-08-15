@@ -282,6 +282,8 @@ void PhysicsWorld::findContacts(JobSystem* jobs) {
     SKEIN_PROFILE("physics/narrowphase");
     const float wakeSpeed2 = settings.sleepSpeed * settings.sleepSpeed;
     std::atomic<uint64_t> pairs{0};
+    std::atomic<uint64_t> near{0};
+    std::atomic<uint64_t> duplicates{0};
 
     auto narrow = [&](size_t i, size_t j, Contact& out) -> bool {
         bool boxA = kind_[i] == static_cast<uint32_t>(ColliderKind::Box);
@@ -349,7 +351,7 @@ void PhysicsWorld::findContacts(JobSystem* jobs) {
 
     auto scan = [&](size_t begin, size_t end) {
         std::vector<Contact>& sink = contactChunks_[begin / BUCKET_GRAIN];
-        uint64_t localPairs = 0;
+        uint64_t localPairs = 0, localNear = 0, localDuplicates = 0;
         for (size_t b = begin; b < end; ++b) {
             const uint32_t from = cellStart_[b], to = cellStart_[b + 1];
             for (uint32_t runStart = from; runStart < to;) {
@@ -371,12 +373,15 @@ void PhysicsWorld::findContacts(JobSystem* jobs) {
                         float cull = ea.reach + eb.reach;
                         ++localPairs;
                         if (dx * dx + dy * dy + dz * dz > cull * cull) continue;
+                        ++localNear;
                         const uint32_t i = std::min(ea.body, eb.body), j = std::max(ea.body, eb.body);
                         if (asleep_[i] && asleep_[j]) continue;
                         if (key != packCell(std::max(bodyLo_[i * 3], bodyLo_[j * 3]),
                                             std::max(bodyLo_[i * 3 + 1], bodyLo_[j * 3 + 1]),
-                                            std::max(bodyLo_[i * 3 + 2], bodyLo_[j * 3 + 2])))
+                                            std::max(bodyLo_[i * 3 + 2], bodyLo_[j * 3 + 2]))) {
+                            ++localDuplicates;
                             continue;
+                        }
                         Contact contact{i, j, Vec3{0, 1, 0}, 0};
                         if (!narrow(i, j, contact)) continue;
                         // Only a body that is actually moving wakes a sleeper,
@@ -396,6 +401,8 @@ void PhysicsWorld::findContacts(JobSystem* jobs) {
             }
         }
         pairs.fetch_add(localPairs, std::memory_order_relaxed);
+        near.fetch_add(localNear, std::memory_order_relaxed);
+        duplicates.fetch_add(localDuplicates, std::memory_order_relaxed);
     };
 
     if (jobs && buckets >= BUCKET_GRAIN * 2)
@@ -406,6 +413,8 @@ void PhysicsWorld::findContacts(JobSystem* jobs) {
     contacts_.clear();
     for (auto& c : contactChunks_) contacts_.insert(contacts_.end(), c.begin(), c.end());
     stats_.pairsTested = pairs.load();
+    stats_.nearPairs = near.load();
+    stats_.duplicatePairs = duplicates.load();
     stats_.contacts = static_cast<uint32_t>(contacts_.size());
 }
 
@@ -777,6 +786,8 @@ PhysicsStats PhysicsWorld::step(Scene& scene, float dt, JobSystem* jobs) {
     if (position_.empty()) {
         stats_.contacts = 0;
         stats_.pairsTested = 0;
+        stats_.nearPairs = 0;
+        stats_.duplicatePairs = 0;
         stats_.colors = 0;
         stats_.serialContacts = 0;
         stats_.awake = 0;

@@ -44,6 +44,10 @@ struct PhysicsSettings {
 struct PhysicsStats {
     uint32_t bodies = 0;
     uint64_t pairsTested = 0;
+    /// Pairs left after the cheap reach test, and how many of those were
+    /// dropped because another cell owns the pair.
+    uint64_t nearPairs = 0;
+    uint64_t duplicatePairs = 0;
     uint32_t contacts = 0;
     uint32_t gridCells = 0;
     /// Independent sets the contact graph was coloured into, plus the tail of

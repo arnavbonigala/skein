@@ -189,6 +189,10 @@ int main(int argc, char** argv) {
         perEntity(physicsParallel.median, ps.bodies) + "  " + speedup(physicsSerial.median, physicsParallel.median));
     fact("broadphase", format("%u bodies, %llu pairs tested, %u contacts, %u occupied cells", ps.bodies,
                               static_cast<unsigned long long>(ps.pairsTested), ps.contacts, ps.gridCells));
+    fact("pair funnel", format("%llu tested, %llu within reach, %llu dropped as another cell's, %u contacts",
+                               static_cast<unsigned long long>(ps.pairsTested),
+                               static_cast<unsigned long long>(ps.nearPairs),
+                               static_cast<unsigned long long>(ps.duplicatePairs), ps.contacts));
     {
         double allPairs = 0.5 * static_cast<double>(ps.bodies) * static_cast<double>(ps.bodies - 1);
         fact("broadphase pruning",
