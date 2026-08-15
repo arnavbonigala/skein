@@ -1,8 +1,15 @@
 cmake_minimum_required(VERSION 3.20)
 
 if(APPLE AND NOT CMAKE_OSX_ARCHITECTURES)
-  execute_process(COMMAND uname -m OUTPUT_VARIABLE SKEIN_HOST_ARCH OUTPUT_STRIP_TRAILING_WHITESPACE)
-  set(CMAKE_OSX_ARCHITECTURES ${SKEIN_HOST_ARCH} CACHE STRING "" FORCE)
+  # uname -m reports x86_64 when cmake itself runs under Rosetta, so ask the
+  # kernel for the real machine instead.
+  execute_process(COMMAND sysctl -n hw.optional.arm64 OUTPUT_VARIABLE SKEIN_IS_ARM
+                  OUTPUT_STRIP_TRAILING_WHITESPACE ERROR_QUIET)
+  if(SKEIN_IS_ARM STREQUAL "1")
+    set(CMAKE_OSX_ARCHITECTURES arm64 CACHE STRING "" FORCE)
+  else()
+    set(CMAKE_OSX_ARCHITECTURES x86_64 CACHE STRING "" FORCE)
+  endif()
   list(APPEND CMAKE_PREFIX_PATH /opt/homebrew /usr/local)
 endif()
 
