@@ -24,7 +24,10 @@ constexpr float kWakeDepth = 0.05f;
 namespace {
 
 constexpr size_t BUCKET_GRAIN = 2048;
-constexpr size_t SOLVE_GRAIN = 1024;
+/// Contacts per solver chunk. Small, because a colour is solved and then
+/// waited on: leaving a colour serial costs more than the dispatch does now
+/// that a parallel pass queues one task per worker rather than one per chunk.
+constexpr size_t SOLVE_GRAIN = 128;
 /// Colours live in a 64-bit per-body mask; contacts that find no free colour
 /// land in this bucket and are solved on one thread at the end of each pass.
 constexpr uint32_t MAX_COLORS = 64;
