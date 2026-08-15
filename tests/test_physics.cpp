@@ -987,6 +987,44 @@ Entity spawnJointed(Scene& s, Vec3 pos, float radius, float invMass, Entity othe
 
 }  // namespace
 
+TEST(cutting_one_chain_does_not_disturb_the_one_hanging_next_to_it) {
+    Scene scene;
+    PhysicsWorld physics;
+    physics.settings.useBounds = false;
+    physics.settings.allowSleep = false;
+
+    // Two chains, settled, then the shorter one is cut. Removing a Joint swaps
+    // the pool's last entry into the hole, so every joint after it changes
+    // position: an accumulated impulse indexed by that position would be handed
+    // to the wrong joint and the surviving chain would visibly jolt.
+    auto hang = [&](float x, int links) {
+        Entity previous = spawnSphere(scene, Vec3{x, 10.0f, 0}, Vec3{0, 0, 0}, 0.2f, 0.0f);
+        std::vector<Entity> out;
+        for (int i = 0; i < links; ++i) {
+            previous = spawnJointed(scene, Vec3{x, 10.0f - static_cast<float>(i + 1), 0}, 0.2f, 1.0f, previous, 1.0f);
+            out.push_back(previous);
+        }
+        return out;
+    };
+    std::vector<Entity> keep = hang(0.0f, 10);
+    std::vector<Entity> cut = hang(5.0f, 4);
+
+    for (int f = 0; f < 300; ++f) physics.step(scene, 1.0f / 60.0f, nullptr);
+    std::vector<Vec3> before;
+    for (Entity e : keep) before.push_back(scene.world.get<Transform>(e).position);
+
+    scene.world.remove<Joint>(cut[1]);
+    physics.step(scene, 1.0f / 60.0f, nullptr);
+
+    for (size_t i = 0; i < keep.size(); ++i) {
+        const Vec3 p = scene.world.get<Transform>(keep[i]).position;
+        CHECK(length(p - before[i]) < 0.002f);
+    }
+    // And the cut half is actually falling, so the check above is not passing
+    // because nothing happened.
+    CHECK(scene.world.get<Velocity>(cut[2]).linear.y < -0.1f);
+}
+
 TEST(a_chain_of_joints_hangs_from_its_anchor_without_stretching) {
     Scene scene;
     PhysicsWorld physics;

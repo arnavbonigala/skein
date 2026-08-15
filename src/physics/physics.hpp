@@ -197,12 +197,12 @@ private:
     std::vector<Vec3> jointAnchorB_;
     std::vector<float> jointLength_;
     std::vector<float> jointCompliance_;
-    /// Accumulated impulse per joint, carried between frames so a hanging
-    /// chain starts each step already holding its own weight.
-    /// ponytail: indexed by position in the pool rather than keyed by the pair,
-    /// so it is dropped whenever the joint count changes. Key it like the
-    /// contact cache if joints start being created and destroyed mid-scene.
+    /// Accumulated impulse per joint, read out of the `Joint` component at the
+    /// start of the step and written back at the end, so it survives the pool
+    /// being reordered by an unrelated joint being destroyed.
     std::vector<float> jointImpulse_;
+    /// Pool index each gathered joint came from, for that write-back.
+    std::vector<uint32_t> jointSlot_;
     /// Body index of each gathered collider, for resolving a joint's other end.
     std::vector<uint32_t> slot_;
 

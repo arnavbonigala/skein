@@ -56,6 +56,12 @@ struct Joint {
     /// value gives a rope that sags under weight rather than one the solver
     /// has to be retuned to hold.
     float compliance = 0.0f;
+    /// Load the joint carried last step, replayed at the start of the next one
+    /// so a hanging chain begins already holding its own weight. The physics
+    /// world owns it; it lives here rather than in a side array because a pool
+    /// reorders whenever any joint is destroyed, and an impulse indexed by
+    /// position would then be applied to whichever joint moved into the hole.
+    float impulse = 0.0f;
 };
 
 struct Renderable {

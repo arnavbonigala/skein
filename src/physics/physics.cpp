@@ -425,13 +425,14 @@ void PhysicsWorld::gather(Scene& scene) {
 void PhysicsWorld::gatherJoints(Scene& scene) {
     Pool<Joint>& joints = scene.world.pool<Joint>();
     Pool<Collider>& colliders = scene.world.pool<Collider>();
-    const size_t previous = jointA_.size();
     jointA_.clear();
     jointB_.clear();
     jointAnchorA_.clear();
     jointAnchorB_.clear();
     jointLength_.clear();
     jointCompliance_.clear();
+    jointImpulse_.clear();
+    jointSlot_.clear();
     auto body = [&](Entity e) -> uint32_t {
         if (!colliders.contains(e)) return UINT32_MAX;
         uint32_t dense = colliders.sparse[entityIndex(e)];
@@ -459,11 +460,9 @@ void PhysicsWorld::gatherJoints(Scene& scene) {
         jointAnchorB_.push_back(j.anchorB);
         jointLength_.push_back(j.length);
         jointCompliance_.push_back(j.compliance);
+        jointImpulse_.push_back(settings.warmStart ? j.impulse : 0.0f);
+        jointSlot_.push_back(static_cast<uint32_t>(i));
     }
-    if (jointA_.size() != previous)
-        jointImpulse_.assign(jointA_.size(), 0.0f);
-    else
-        jointImpulse_.resize(jointA_.size(), 0.0f);
 }
 
 void PhysicsWorld::solveJoints(float invDt, bool replay) {
@@ -1629,6 +1628,9 @@ void PhysicsWorld::scatter(Scene& scene, JobSystem* jobs) {
         jobs->parallelFor(entity_.size(), 4096, write);
     else
         write(0, entity_.size());
+
+    Pool<Joint>& joints = scene.world.pool<Joint>();
+    for (size_t k = 0; k < jointSlot_.size(); ++k) joints.data[jointSlot_[k]].impulse = jointImpulse_[k];
 }
 
 PhysicsStats PhysicsWorld::step(Scene& scene, float dt, JobSystem* jobs) {
@@ -1854,7 +1856,7 @@ size_t PhysicsWorld::bytesUsed() const {
                    bytes(entryBucket_) + bytes(entryOffset_) + bytes(halfExtent_) + bytes(invInertia_) +
                    bytes(invInertiaLocal_) + bytes(invInertiaWorld_) + bytes(invMass_) + bytes(jointA_) +
                    bytes(jointAnchorA_) + bytes(jointAnchorB_) + bytes(jointB_) + bytes(jointCompliance_) +
-                   bytes(jointImpulse_) + bytes(jointLength_) + bytes(kind_) + bytes(liveDepth_) + bytes(motion_) +
+                   bytes(jointImpulse_) + bytes(jointSlot_) + bytes(jointLength_) + bytes(kind_) + bytes(liveDepth_) + bytes(motion_) +
                    bytes(normalImpulse_) + bytes(normalMass_) + bytes(orientation_) + bytes(position_) +
                    bytes(pseudo_) + bytes(radius_) + bytes(reach_) + bytes(restitution_) + bytes(friction_) +
                    bytes(restitutionBias_) + bytes(rotated_) + bytes(sleepTimer_) + bytes(slot_) +
