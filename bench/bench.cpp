@@ -3,6 +3,7 @@
 #include <cstdio>
 #include <cstring>
 #include <cstdlib>
+#include <sys/resource.h>
 #include <memory>
 #include <random>
 #include <cmath>
@@ -29,18 +30,42 @@ struct Timing {
     double worst = 0;
 };
 
+/// Involuntary context switches so far, across every thread in the process.
+/// A sample that spans one was measured while something else owned the core.
+long preemptions() {
+    rusage usage{};
+    getrusage(RUSAGE_SELF, &usage);
+    return usage.ru_nivcsw;
+}
+
+/// Total samples taken and samples thrown away because the scheduler
+/// interrupted them, summed over the whole run.
+long gTotalSamples = 0;
+long gPreempted = 0;
+
 /// Runs `fn` `iterations` times after `warmup` untimed passes and reports the
-/// median, which is far more stable than a mean on a laptop.
+/// median, which is far more stable than a mean on a laptop. Samples the
+/// scheduler interrupted are dropped rather than averaged in: on a machine
+/// with other work on it those are measurements of the other work.
 template <typename Fn>
 Timing measure(int warmup, int iterations, Fn&& fn) {
     for (int i = 0; i < warmup; ++i) fn();
     std::vector<double> samples;
+    std::vector<double> clean;
     samples.reserve(static_cast<size_t>(iterations));
     for (int i = 0; i < iterations; ++i) {
+        long before = preemptions();
         Clock::time_point start = Clock::now();
         fn();
-        samples.push_back(millisSince(start));
+        double ms = millisSince(start);
+        samples.push_back(ms);
+        if (preemptions() == before) clean.push_back(ms);
     }
+    gTotalSamples += static_cast<long>(samples.size());
+    gPreempted += static_cast<long>(samples.size() - clean.size());
+    // Below a handful of clean samples the median of the rest is the more
+    // honest number, since what is left is not a distribution.
+    if (clean.size() >= 5) samples.swap(clean);
     std::sort(samples.begin(), samples.end());
     Timing t;
     t.median = samples[samples.size() / 2];
@@ -460,7 +485,7 @@ int main(int argc, char** argv) {
              "that escapes keeps moving fast enough to split every later step");
     }
 
-    heading("ray queries against the physics grid");
+    heading("ray and overlap queries against the physics grid");
     {
         // The grid the solver already built answers picking and line-of-sight
         // queries for free, walked cell by cell instead of tested body by body.
@@ -938,6 +963,12 @@ int main(int argc, char** argv) {
     fact("mesh + material assets", bytes(demo.assets.bytesUsed()));
     fact("physics working set", bytes(demo.physics.bytesUsed()));
     fact("culling working set", bytes(culler.bytesUsed()));
+
+    heading("measurement hygiene");
+    fact("samples", format("%ld taken, %ld dropped as preempted (%.1f%%)", gTotalSamples, gPreempted,
+                           100.0 * static_cast<double>(gPreempted) / std::max(1L, gTotalSamples)));
+    fact("what that means", "a sample the scheduler interrupted is a measurement of whatever interrupted it, "
+                            "so it is thrown away rather than averaged in");
     std::printf("\n");
     return 0;
 }
