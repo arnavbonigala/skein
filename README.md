@@ -373,6 +373,25 @@ Cluster verdicts for that frame: 290 clusters — 55 outside, 154 inside, 81
 straddling; the straddling ones break into 2,313 sub-clusters of which 171 are
 outside and 181 fully inside.
 
+One camera proves nothing, since a cluster only pays when it lands wholly in or
+wholly out of the frustum, and a camera can be chosen to make that likely. Six
+of them, same scene, from an empty view to one holding the whole field:
+
+| Camera | Flat | Clustered | | Visible | Tested |
+|---|---|---|---|---|---|
+| Tight, looking away | 0.055 ms | 0.038 ms | 1.45x | 0.0% | 0.0% |
+| Narrow fov into the field | 0.237 ms | 0.188 ms | 1.26x | 51.6% | 19.3% |
+| Default view | 0.289 ms | 0.233 ms | 1.24x | 68.2% | 12.7% |
+| Wide fov, centred | 0.268 ms | 0.235 ms | 1.14x | 64.6% | 11.9% |
+| Inside the field, looking down | 0.372 ms | 0.342 ms | 1.09x | 92.8% | 18.3% |
+| Far back, whole field in view | 0.373 ms | 0.276 ms | 1.35x | 100.0% | 0.0% |
+
+The last column is why it holds: no camera drives more than a fifth of the
+objects down to their own frustum test. The worst case is the one that looks
+easiest — standing inside the field with almost everything visible, where the
+clusters that surround the camera are the ones most likely to straddle — and
+even there it does not lose.
+
 Objects drift out of Morton order as they move, so `CullSystem::maintain()`
 rebuilds the cluster bounds, compares the mean cluster size against what it was
 right after the last sort, and re-sorts only once that ratio crosses a
@@ -435,7 +454,10 @@ compare like for like:
 
 At a million entities the ECS integrate pass is 2.4 ns per entity and 433,333
 renderables cull and batch in 2.5 ms, with the clustered and flat paths
-agreeing on the visible set at every size.
+agreeing on the visible set at every size. Clustering keeps working as the
+population grows rather than degrading into it: at a million entities the sweep
+builds 3,386 clusters, 807 of them straddling, and 49,792 of 433,333 objects —
+11.5% — need a frustum test of their own.
 
 ### What warm starting buys a stack
 
