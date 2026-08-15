@@ -594,18 +594,23 @@ void PhysicsWorld::loadCachedImpulses(JobSystem* jobs) {
     normalImpulse_.resize(n);
     tangentImpulse_.resize(n);
     restitutionBias_.resize(n);
+    approach_.resize(n);
     auto body = [&](size_t begin, size_t end) {
         for (size_t i = begin; i < end; ++i) {
             uint64_t key = contactKey(entity_[contacts_[i].a], entity_[contacts_[i].b]);
             contactKey_[i] = key;
             float found = 0.0f;
+            float foundApproach = 0.0f;
             Vec3 foundTangent{0, 0, 0};
-            if (settings.warmStart && cacheMask_ != 0) {
+            if (cacheMask_ != 0) {
                 for (uint32_t slot = static_cast<uint32_t>(key) & cacheMask_;; slot = (slot + 1) & cacheMask_) {
                     if (cache_[slot].key == 0) break;
                     if (cache_[slot].key == key) {
-                        found = cache_[slot].impulse;
-                        foundTangent = cache_[slot].tangent;
+                        foundApproach = cache_[slot].approach;
+                        if (settings.warmStart) {
+                            found = cache_[slot].impulse;
+                            foundTangent = cache_[slot].tangent;
+                        }
                         break;
                     }
                 }
@@ -618,9 +623,21 @@ void PhysicsWorld::loadCachedImpulses(JobSystem* jobs) {
             tangentImpulse_[i] = t;
             // Resting contacts must not bounce, so restitution only enters
             // above a speed where a collision is what is actually happening.
+            // While the pair is still apart the gap constraint owns the contact
+            // and restitution stays out of it, or the body would be turned
+            // around before it ever arrived; the approach speed is carried
+            // forward instead and spent on the frame the two actually meet.
             float vn = dot(velocity_[contacts_[i].b] - velocity_[contacts_[i].a], contacts_[i].normal);
-            float e = vn < -1.0f ? std::min(restitution_[contacts_[i].a], restitution_[contacts_[i].b]) : 0.0f;
-            restitutionBias_[i] = -e * vn;
+            float approach = std::max(-vn, foundApproach);
+            if (contacts_[i].depth < 0.0f) {
+                restitutionBias_[i] = 0.0f;
+                approach_[i] = approach;
+            } else {
+                float e = approach > 1.0f ? std::min(restitution_[contacts_[i].a], restitution_[contacts_[i].b])
+                                          : 0.0f;
+                restitutionBias_[i] = e * approach;
+                approach_[i] = 0.0f;
+            }
         }
     };
     if (jobs && n >= 8192)
@@ -642,7 +659,7 @@ void PhysicsWorld::storeCachedImpulses(JobSystem* jobs) {
     // insert-only table needs, so the whole pass runs on the job system.
     auto insert = [&](size_t begin, size_t end) {
         for (size_t i = begin; i < end; ++i) {
-            if (normalImpulse_[i] <= 0.0f) continue;
+            if (normalImpulse_[i] <= 0.0f && approach_[i] <= 0.0f) continue;
             uint64_t key = contactKey_[i];
             for (uint32_t slot = static_cast<uint32_t>(key) & cacheMask_;; slot = (slot + 1) & cacheMask_) {
                 std::atomic_ref<uint64_t> cell(cache_[slot].key);
@@ -651,6 +668,7 @@ void PhysicsWorld::storeCachedImpulses(JobSystem* jobs) {
                     cell.compare_exchange_strong(empty, key, std::memory_order_relaxed)) {
                     cache_[slot].impulse = normalImpulse_[i];
                     cache_[slot].tangent = tangentImpulse_[i];
+                    cache_[slot].approach = approach_[i];
                     break;
                 }
             }

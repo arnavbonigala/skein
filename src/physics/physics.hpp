@@ -146,12 +146,16 @@ private:
     std::vector<Vec3> tangentImpulse_;
     std::vector<float> deepest_;
     std::vector<float> restitutionBias_;
+    std::vector<float> approach_;
     std::vector<uint64_t> contactKey_;
     /// Key and impulse share a cache line, since a probe reads both.
     struct CacheSlot {
         uint64_t key = 0;
         float impulse = 0.0f;
-        float pad = 0.0f;
+        /// Fastest approach seen while the pair was still apart, so a bounce
+        /// is sized by the speed the body arrived at rather than by the speed
+        /// left after the gap constraint has already slowed it down.
+        float approach = 0.0f;
         Vec3 tangent{0, 0, 0};
     };
     std::vector<CacheSlot> cache_;

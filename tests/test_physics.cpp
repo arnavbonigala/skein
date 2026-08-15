@@ -620,3 +620,45 @@ TEST(a_long_soak_stays_finite_and_stops_allocating) {
     // solver is feeding it energy.
     CHECK(fastest < 5.0);
 }
+
+TEST(a_fast_bouncy_body_rebounds_at_the_speed_it_arrived_with) {
+    Scene scene;
+    Transform floorT;
+    floorT.position = Vec3{0, 0, 0};
+    Entity floor = scene.create(floorT);
+    Collider fc;
+    fc.kind = static_cast<uint32_t>(ColliderKind::Box);
+    fc.halfExtents = Vec3{20.0f, 0.5f, 20.0f};
+    fc.invMass = 0.0f;
+    fc.restitution = 0.8f;
+    scene.world.add<Collider>(floor, fc);
+    scene.world.add<Velocity>(floor, Velocity{});
+
+    Transform ballT;
+    ballT.position = Vec3{0, 12.0f, 0};
+    Entity ball = scene.create(ballT);
+    scene.world.add<Velocity>(ball, Velocity{Vec3{0, -80.0f, 0}, Vec3{0, 0, 0}});
+    Collider bc;
+    bc.radius = 0.3f;
+    bc.invMass = 1.0f;
+    bc.restitution = 0.8f;
+    scene.world.add<Collider>(ball, bc);
+
+    PhysicsWorld physics;
+    physics.settings.useBounds = false;
+    physics.settings.gravity = Vec3{0, 0, 0};
+    physics.settings.linearDamping = 0.0f;
+    physics.settings.maxSubsteps = 1;
+
+    float fastestUp = 0.0f;
+    for (int i = 0; i < 40; ++i) {
+        physics.step(scene, 1.0f / 60.0f, nullptr);
+        fastestUp = std::max(fastestUp, scene.world.get<Velocity>(ball).linear.y);
+    }
+
+    // The gap constraint stops the ball at the surface before it can bounce, so
+    // the bounce has to be sized by the speed it approached with rather than by
+    // whatever is left once it gets there.
+    CHECK(fastestUp > 0.5f * 80.0f);
+    CHECK(scene.world.get<Transform>(ball).position.y > 0.8f);
+}
