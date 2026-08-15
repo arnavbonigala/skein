@@ -263,6 +263,36 @@ TEST(coloured_solver_matches_between_one_thread_and_many) {
     }
 }
 
+TEST(a_stack_holds_its_height_at_the_default_iteration_count) {
+    // Cancelling each contact's approach velocity from scratch every frame
+    // cannot hold a stack up: the reaction has to travel down the column, and
+    // two iterations is nowhere near enough hops. The impulse cached from last
+    // frame is what makes the column stand.
+    Scene scene;
+    PhysicsWorld world;
+    world.settings.boundsMin = Vec3{-6, 0, -6};
+    world.settings.boundsMax = Vec3{6, 40, 6};
+    world.settings.restitutionFloor = 0.0f;
+
+    const float radius = 0.5f;
+    std::vector<Entity> column;
+    for (int i = 0; i < 8; ++i) {
+        Entity e = spawnSphere(scene, Vec3{0, radius + static_cast<float>(i) * 1.02f, 0}, Vec3{0, 0, 0}, radius);
+        scene.world.tryGet<Collider>(e)->restitution = 0.0f;
+        column.push_back(e);
+    }
+
+    for (int i = 0; i < 600; ++i) world.step(scene, 1.0f / 60.0f);
+
+    for (size_t i = 1; i < column.size(); ++i) {
+        float gap = scene.world.tryGet<Transform>(column[i])->position.y -
+                    scene.world.tryGet<Transform>(column[i - 1])->position.y;
+        CHECK(gap > 2.0f * radius - 0.08f);
+    }
+    float top = scene.world.tryGet<Transform>(column.back())->position.y;
+    CHECK(top > radius + 7.0f * (2.0f * radius - 0.08f));
+}
+
 TEST(a_settled_pile_falls_asleep_and_a_moving_body_wakes_it) {
     Scene scene;
     PhysicsWorld world;
