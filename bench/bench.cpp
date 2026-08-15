@@ -284,6 +284,9 @@ int main(int argc, char** argv) {
             world.settings.allowSleep = false;
             world.settings.warmStart = warm;
             world.settings.solverIterations = iters;
+            // One substep, so an iteration count means iterations and nothing
+            // else; substepping gets its own comparison further down.
+            world.settings.solverSubsteps = 1;
             std::vector<Entity> tops;
             for (int c = 0; c < 32; ++c) {
                 float x = static_cast<float>(c % 8) * 3.0f - 12.0f;
@@ -317,6 +320,79 @@ int main(int argc, char** argv) {
                 format("top sphere at %.2f of %.2f (%.0f%% standing)", warmTop, ideal,
                        100.0 * (warmTop - radius) / (ideal - radius)));
         }
+    }
+
+    heading("stacks of turned boxes (16 columns of 6)");
+    {
+        // A box face is held by four contact points at once, and each of them
+        // can rotate the pair as well as push it. This is what that costs and
+        // what it buys: a box tested as its axis-aligned extent stacks with no
+        // manifold to clip and no torque to resolve, and leans.
+        // The pairs of rows below cost the same: a substep and an iteration are
+        // one sweep of the contacts each. The difference is that a substep also
+        // moves the bodies, so every sweep after the first is answering where
+        // the pair is now rather than where it was when the step began.
+        auto tower = [&](bool oriented, int substeps, int iters) {
+            Scene scene;
+            PhysicsWorld world;
+            world.settings.useBounds = false;
+            world.settings.allowSleep = false;
+            world.settings.rotatedBoxes = oriented;
+            world.settings.solverIterations = iters;
+            world.settings.solverSubsteps = substeps;
+            auto box = [&](Vec3 p, Quat q, Vec3 half, float invMass) {
+                Transform t;
+                t.position = p;
+                t.rotation = q;
+                Entity e = scene.create(t);
+                scene.world.add<Velocity>(e, Velocity{});
+                Collider c;
+                c.kind = static_cast<uint32_t>(ColliderKind::Box);
+                c.halfExtents = half;
+                c.invMass = invMass;
+                c.restitution = 0.0f;
+                scene.world.add<Collider>(e, c);
+                return e;
+            };
+            box(Vec3{0, -1, 0}, Quat{}, Vec3{40, 1, 40}, 0.0f);
+            std::vector<Entity> tops;
+            for (int c = 0; c < 16; ++c) {
+                float x = static_cast<float>(c % 4) * 4.0f - 6.0f;
+                float z = static_cast<float>(c / 4) * 4.0f - 6.0f;
+                for (int i = 0; i < 6; ++i) {
+                    Entity e = box(Vec3{x, 0.5f + static_cast<float>(i) * 1.02f, z},
+                                   Quat::axisAngle(Vec3{0, 1, 0}, 0.35f * static_cast<float>(i + c)),
+                                   Vec3{0.5f, 0.5f, 0.5f}, 1.0f);
+                    if (i == 5) tops.push_back(e);
+                }
+            }
+            for (int i = 0; i < 600; ++i) world.step(scene, 1.0f / 60.0f, &jobs);
+            double height = 0, speed = 0, tilt = 0;
+            for (Entity e : tops) {
+                const Transform& t = *scene.world.tryGet<Transform>(e);
+                height += t.position.y;
+                speed += length(scene.world.tryGet<Velocity>(e)->linear);
+                tilt += std::acos(std::clamp(rotate(t.rotation, Vec3{0, 1, 0}).y, -1.0f, 1.0f));
+            }
+            const double n = static_cast<double>(tops.size());
+            Timing t = measure(2, 20, [&] { world.step(scene, 1.0f / 60.0f, &jobs); });
+            return std::make_tuple(t.median, height / n, speed / n, tilt / n * 180.0 / PI,
+                                   static_cast<double>(world.stats().contacts));
+        };
+        const double ideal = 0.5 + 5.0;
+        auto report = [&](const char* label, std::tuple<double, double, double, double, double> r) {
+            auto [ms, top, speed, tilt, contacts] = r;
+            row(label, ms,
+                format("top box at %.2f of %.2f (%.0f%% standing), %.0f contacts, %.3f m/s left, %.1f deg of lean",
+                       top, ideal, 100.0 * (top - 0.5) / (ideal - 0.5), contacts, speed, tilt));
+        };
+        report("1 substep  x 2 iterations", tower(true, 1, 2));
+        report("2 substeps x 1 iteration ", tower(true, 2, 1));
+        report("1 substep  x 4 iterations", tower(true, 1, 4));
+        report("4 substeps x 1 iteration ", tower(true, 4, 1));
+        report("1 substep  x 8 iterations", tower(true, 1, 8));
+        report("8 substeps x 1 iteration ", tower(true, 8, 1));
+        report("4 substeps, axis-aligned ", tower(false, 4, 1));
     }
 
     heading("sleeping bodies");
