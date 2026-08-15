@@ -484,3 +484,91 @@ TEST(a_discrete_solver_needs_substeps_for_the_same_wall) {
     CHECK(worstSplit > 1);
     CHECK(scene.world.get<Transform>(bullet).position.y > 0.2f);
 }
+
+TEST(raycast_finds_the_same_nearest_body_as_brute_force) {
+    std::mt19937 rng(77);
+    std::uniform_real_distribution<float> p(-20.0f, 20.0f);
+    std::uniform_real_distribution<float> r(0.3f, 1.2f);
+
+    Scene scene;
+    std::vector<Vec3> centers;
+    std::vector<float> radii;
+    std::vector<Entity> ids;
+    for (int i = 0; i < 1500; ++i) {
+        Vec3 pos{p(rng), p(rng), p(rng)};
+        float rad = r(rng);
+        centers.push_back(pos);
+        radii.push_back(rad);
+        ids.push_back(spawnSphere(scene, pos, Vec3{0, 0, 0}, rad, 0.0f));
+    }
+
+    PhysicsWorld physics;
+    physics.settings.gravity = Vec3{0, 0, 0};
+    physics.settings.useBounds = false;
+    physics.step(scene, 0.0f, nullptr);
+
+    int hits = 0;
+    for (int i = 0; i < 400; ++i) {
+        Vec3 origin{p(rng), p(rng), p(rng)};
+        Vec3 dir{p(rng), p(rng), p(rng)};
+        float len = length(dir);
+        if (len < 1e-3f) continue;
+        dir = dir / len;
+
+        float bestT = 60.0f;
+        Entity bestEntity = 0;
+        for (size_t b = 0; b < centers.size(); ++b) {
+            Vec3 m = origin - centers[b];
+            float bq = dot(m, dir);
+            float c = length2(m) - radii[b] * radii[b];
+            if (c > 0.0f && bq > 0.0f) continue;
+            float disc = bq * bq - c;
+            if (disc < 0.0f) continue;
+            float t = std::max(0.0f, -bq - std::sqrt(disc));
+            if (t < bestT) {
+                bestT = t;
+                bestEntity = ids[b];
+            }
+        }
+
+        RayHit hit = physics.raycast(origin, dir, 60.0f);
+        if (bestEntity == 0) {
+            CHECK(!hit.hit);
+            continue;
+        }
+        ++hits;
+        CHECK(hit.hit);
+        CHECK_NEAR(hit.distance, bestT, 1e-3);
+        // A ray that starts inside overlapping bodies hits both at zero, so
+        // which one is reported is a tie rather than an answer.
+        if (bestT > 0.0f) CHECK_EQ(hit.entity, bestEntity);
+    }
+    CHECK(hits > 200);
+}
+
+TEST(raycast_respects_max_distance_and_box_faces) {
+    Scene scene;
+    Transform boxT;
+    boxT.position = Vec3{0, 0, 10.0f};
+    Entity box = scene.create(boxT);
+    Collider bc;
+    bc.kind = static_cast<uint32_t>(ColliderKind::Box);
+    bc.halfExtents = Vec3{2.0f, 2.0f, 1.0f};
+    bc.invMass = 0.0f;
+    scene.world.add<Collider>(box, bc);
+    scene.world.add<Velocity>(box, Velocity{});
+
+    PhysicsWorld physics;
+    physics.settings.gravity = Vec3{0, 0, 0};
+    physics.settings.useBounds = false;
+    physics.step(scene, 0.0f, nullptr);
+
+    RayHit hit = physics.raycast(Vec3{0, 0, 0}, Vec3{0, 0, 1}, 20.0f);
+    CHECK(hit.hit);
+    CHECK_EQ(hit.entity, box);
+    CHECK_NEAR(hit.distance, 9.0, 1e-3);
+    CHECK_NEAR(hit.normal.z, -1.0, 1e-4);
+
+    CHECK(!physics.raycast(Vec3{0, 0, 0}, Vec3{0, 0, 1}, 8.0f).hit);
+    CHECK(!physics.raycast(Vec3{0, 0, 0}, Vec3{0, 1, 0}, 100.0f).hit);
+}

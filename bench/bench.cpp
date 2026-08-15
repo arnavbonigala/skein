@@ -448,6 +448,66 @@ int main(int argc, char** argv) {
              "that escapes keeps moving fast enough to split every later step");
     }
 
+    heading("ray queries against the physics grid");
+    {
+        // The grid the solver already built answers picking and line-of-sight
+        // queries for free, walked cell by cell instead of tested body by body.
+        std::mt19937 rng(4242);
+        std::uniform_real_distribution<float> place(-55.0f, 55.0f);
+        std::vector<std::pair<Vec3, Vec3>> rays;
+        for (int i = 0; i < 4096; ++i) {
+            Vec3 origin{place(rng), place(rng) * 0.5f + 40.0f, place(rng)};
+            Vec3 dir{place(rng), place(rng), place(rng)};
+            float len = length(dir);
+            rays.emplace_back(origin, len > 1e-3f ? dir / len : Vec3{0, -1, 0});
+        }
+        uint32_t hits = 0;
+        Timing t = measure(2, 20, [&] {
+            hits = 0;
+            for (const auto& [origin, dir] : rays)
+                if (demo.physics.raycast(origin, dir, 200.0f).hit) ++hits;
+        });
+        row("4,096 rays into 30,000 bodies", t.median,
+            format("%.2f us per ray, %.2f M rays/s, %u hit", t.median * 1000.0 / 4096.0,
+                   4096.0 / (t.median / 1000.0) / 1e6, hits));
+
+        // The same queries with no acceleration structure, on a tenth of the
+        // rays because it is that much slower.
+        std::vector<Vec3> centers;
+        std::vector<float> radii;
+        forEach<Collider>(demo.scene.world, [&](Entity e, Collider& c) {
+            const Transform* tr = demo.scene.world.tryGet<Transform>(e);
+            if (!tr) return;
+            centers.push_back(tr->position);
+            radii.push_back(c.kind == static_cast<uint32_t>(ColliderKind::Sphere) ? c.radius
+                                                                                  : maxComponent(c.halfExtents));
+        });
+        const size_t brutRays = 256;
+        uint32_t bruteHits = 0;
+        Timing brute = measure(1, 5, [&] {
+            bruteHits = 0;
+            for (size_t i = 0; i < brutRays; ++i) {
+                const auto& [origin, dir] = rays[i];
+                float best = 200.0f;
+                for (size_t b = 0; b < centers.size(); ++b) {
+                    Vec3 m = origin - centers[b];
+                    float bq = dot(m, dir);
+                    float c = length2(m) - radii[b] * radii[b];
+                    if (c > 0.0f && bq > 0.0f) continue;
+                    float disc = bq * bq - c;
+                    if (disc < 0.0f) continue;
+                    best = std::min(best, std::max(0.0f, -bq - std::sqrt(disc)));
+                }
+                if (best < 200.0f) ++bruteHits;
+            }
+        });
+        double gridPerRay = t.median / 4096.0;
+        double brutePerRay = brute.median / static_cast<double>(brutRays);
+        row("same rays, every body tested", brute.median * (4096.0 / static_cast<double>(brutRays)),
+            format("%.2f us per ray, %.0fx slower (%zu rays, %u hit)", brutePerRay * 1000.0,
+                   brutePerRay / gridPerRay, brutRays, bruteHits));
+    }
+
     heading("frustum culling and batching");
     demo.scene.updateTransforms(&jobs);
     Frustum frustum = extractFrustum(benchViewProj());

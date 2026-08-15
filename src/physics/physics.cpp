@@ -3,6 +3,8 @@
 #include <algorithm>
 #include <atomic>
 #include <bit>
+#include <cmath>
+#include <limits>
 #include <type_traits>
 
 #include "core/jobs.hpp"
@@ -892,6 +894,124 @@ PhysicsStats PhysicsWorld::step(Scene& scene, float dt, JobSystem* jobs) {
     else stats_.awake = static_cast<uint32_t>(position_.size());
     scatter(scene, jobs);
     return stats_;
+}
+
+namespace {
+
+/// Nearest positive intersection of a ray with a sphere, or -1.
+float raySphere(const Vec3& origin, const Vec3& dir, const Vec3& center, float radius) {
+    Vec3 m = origin - center;
+    float b = dot(m, dir);
+    float c = length2(m) - radius * radius;
+    if (c > 0.0f && b > 0.0f) return -1.0f;
+    float disc = b * b - c;
+    if (disc < 0.0f) return -1.0f;
+    float t = -b - std::sqrt(disc);
+    return t < 0.0f ? 0.0f : t;
+}
+
+/// Slab test. Fills `normal` with the face the ray enters through.
+float rayBox(const Vec3& origin, const Vec3& dir, const Vec3& center, const Vec3& half, Vec3& normal) {
+    float tMin = 0.0f, tMax = std::numeric_limits<float>::max();
+    int axis = 0;
+    float sign = 1.0f;
+    for (int i = 0; i < 3; ++i) {
+        float o = origin[i] - center[i];
+        if (std::abs(dir[i]) < 1e-8f) {
+            if (std::abs(o) > half[i]) return -1.0f;
+            continue;
+        }
+        float inv = 1.0f / dir[i];
+        float t1 = (-half[i] - o) * inv;
+        float t2 = (half[i] - o) * inv;
+        float enterSign = -1.0f;
+        if (t1 > t2) {
+            std::swap(t1, t2);
+            enterSign = 1.0f;
+        }
+        if (t1 > tMin) {
+            tMin = t1;
+            axis = i;
+            sign = enterSign;
+        }
+        tMax = std::min(tMax, t2);
+        if (tMin > tMax) return -1.0f;
+    }
+    normal = Vec3{0, 0, 0};
+    normal[axis] = sign;
+    return tMin;
+}
+
+}  // namespace
+
+RayHit PhysicsWorld::raycast(const Vec3& origin, const Vec3& dir, float maxDistance) const {
+    RayHit hit;
+    float len = length(dir);
+    if (entries_.empty() || len < 1e-8f || maxDistance <= 0.0f) return hit;
+    const Vec3 d = dir / len;
+
+    // The ray walks cells in order, so the first hit found in a cell is final
+    // once the ray has left that cell — but not before: a body registered in
+    // several cells can be entered from a cell it only touches the edge of.
+    const float inv = 1.0f / cell_;
+    int32_t cx = static_cast<int32_t>(std::floor(origin.x * inv));
+    int32_t cy = static_cast<int32_t>(std::floor(origin.y * inv));
+    int32_t cz = static_cast<int32_t>(std::floor(origin.z * inv));
+    int32_t stepX = d.x > 0 ? 1 : -1, stepY = d.y > 0 ? 1 : -1, stepZ = d.z > 0 ? 1 : -1;
+
+    auto boundary = [&](float o, int32_t c, float dc, int32_t s) {
+        if (std::abs(dc) < 1e-8f) return std::numeric_limits<float>::max();
+        float edge = static_cast<float>(s > 0 ? c + 1 : c) * cell_;
+        return (edge - o) / dc;
+    };
+    float tMaxX = boundary(origin.x, cx, d.x, stepX);
+    float tMaxY = boundary(origin.y, cy, d.y, stepY);
+    float tMaxZ = boundary(origin.z, cz, d.z, stepZ);
+    const float tDeltaX = std::abs(d.x) < 1e-8f ? std::numeric_limits<float>::max() : cell_ / std::abs(d.x);
+    const float tDeltaY = std::abs(d.y) < 1e-8f ? std::numeric_limits<float>::max() : cell_ / std::abs(d.y);
+    const float tDeltaZ = std::abs(d.z) < 1e-8f ? std::numeric_limits<float>::max() : cell_ / std::abs(d.z);
+
+    float best = maxDistance;
+    float travelled = 0.0f;
+    while (travelled <= maxDistance) {
+        const uint64_t key = packCell(cx, cy, cz);
+        const uint32_t bucket = hashCell(cx, cy, cz) & bucketMask_;
+        for (uint32_t i = cellStart_[bucket]; i < cellStart_[bucket + 1]; ++i) {
+            const GridEntry& e = entries_[i];
+            if (e.cell != key) continue;
+            const uint32_t b = e.body;
+            float t;
+            Vec3 normal;
+            if (kind_[b] == static_cast<uint32_t>(ColliderKind::Sphere)) {
+                t = raySphere(origin, d, position_[b], radius_[b]);
+                if (t >= 0.0f) normal = normalize(origin + d * t - position_[b]);
+            } else {
+                t = rayBox(origin, d, position_[b], halfExtent_[b], normal);
+            }
+            if (t < 0.0f || t > best) continue;
+            best = t;
+            hit.hit = true;
+            hit.entity = entity_[b];
+            hit.distance = t;
+            hit.point = origin + d * t;
+            hit.normal = normal;
+        }
+        float exit = std::min(tMaxX, std::min(tMaxY, tMaxZ));
+        if (hit.hit && best <= exit) break;
+        travelled = exit;
+        if (travelled > maxDistance) break;
+        if (tMaxX < tMaxY && tMaxX < tMaxZ) {
+            cx += stepX;
+            tMaxX += tDeltaX;
+        } else if (tMaxY < tMaxZ) {
+            cy += stepY;
+            tMaxY += tDeltaY;
+        } else {
+            cz += stepZ;
+            tMaxZ += tDeltaZ;
+        }
+    }
+    return hit;
 }
 
 size_t PhysicsWorld::bytesUsed() const {

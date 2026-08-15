@@ -71,11 +71,25 @@ struct PhysicsStats {
 
 /// Broadphase is a hashed uniform grid built with a counting sort, so the
 /// per-step cost is linear and the neighbour scan reads contiguous memory.
+/// Result of a ray query. `entity` is only meaningful when `hit` is set.
+struct RayHit {
+    bool hit = false;
+    Entity entity = 0;
+    float distance = 0.0f;
+    Vec3 point{0, 0, 0};
+    Vec3 normal{0, 0, 0};
+};
+
 class PhysicsWorld {
 public:
     PhysicsSettings settings;
 
     PhysicsStats step(Scene& scene, float dt, JobSystem* jobs = nullptr);
+
+    /// Nearest collider along `origin + dir * t` for t in [0, maxDistance],
+    /// walked cell by cell through the grid the last step built. `dir` need not
+    /// be normalised. Returns a miss when the world has not been stepped yet.
+    RayHit raycast(const Vec3& origin, const Vec3& dir, float maxDistance) const;
 
     const PhysicsStats& stats() const { return stats_; }
     size_t bytesUsed() const;
