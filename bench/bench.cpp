@@ -305,6 +305,58 @@ int main(int argc, char** argv) {
                 speedup(churnOff, churnOn));
     }
 
+    heading("fast bodies against a thin wall");
+    {
+        // Speed, not body count, is what a fixed step misses: a body that
+        // crosses the wall between two tests is never tested against it.
+        auto volley = [&](int maxSubsteps) {
+            Scene scene;
+            PhysicsWorld world;
+            world.settings.useBounds = false;
+            world.settings.gravity = Vec3{0, 0, 0};
+            world.settings.maxSubsteps = maxSubsteps;
+            Transform wallT;
+            Entity wall = scene.create(wallT);
+            Collider wc;
+            wc.kind = static_cast<uint32_t>(ColliderKind::Box);
+            wc.halfExtents = Vec3{40.0f, 0.25f, 40.0f};
+            wc.invMass = 0.0f;
+            scene.world.add<Collider>(wall, wc);
+            scene.world.add<Velocity>(wall, Velocity{});
+
+            std::vector<Entity> shots;
+            for (int i = 0; i < 400; ++i) {
+                float speed = 20.0f + static_cast<float>(i) * 0.5f;
+                Transform t;
+                t.position = Vec3{static_cast<float>(i % 20) * 2.0f - 20.0f,
+                                  8.0f, static_cast<float>(i / 20) * 2.0f - 20.0f};
+                Entity e = scene.create(t);
+                scene.world.add<Velocity>(e, Velocity{Vec3{0, -speed, 0}, Vec3{0, 0, 0}});
+                Collider c;
+                c.radius = 0.15f;
+                c.restitution = 0.0f;
+                scene.world.add<Collider>(e, c);
+                shots.push_back(e);
+            }
+            uint32_t worstSplit = 0;
+            Timing t = measure(2, 60, [&] {
+                worstSplit = std::max(worstSplit, world.step(scene, 1.0f / 60.0f, &jobs).substeps);
+            });
+            int through = 0;
+            for (Entity e : shots)
+                if (scene.world.tryGet<Transform>(e)->position.y < -1.0f) ++through;
+            return std::make_tuple(t.median, through, worstSplit);
+        };
+        for (int cap : {1, 4, 16}) {
+            auto [ms, through, split] = volley(cap);
+            row(format("400 shots, 20 to 220 m/s, cap %2d", cap).c_str(), ms,
+                format("%3d of 400 passed through the wall, up to %u substeps", through, split));
+        }
+        fact("why the tightest cap is not the slowest",
+             "a shot that stops at the wall stops needing splits, while every one "
+             "that escapes keeps moving fast enough to split every later step");
+    }
+
     heading("frustum culling and batching");
     demo.scene.updateTransforms(&jobs);
     Frustum frustum = extractFrustum(benchViewProj());
