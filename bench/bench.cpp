@@ -2,6 +2,7 @@
 #include <cstdarg>
 #include <cstdio>
 #include <cstring>
+#include <cstdlib>
 #include <memory>
 #include <random>
 #include <cmath>
@@ -149,6 +150,17 @@ int main(int argc, char** argv) {
 
     std::printf("\033[1mskein benchmark\033[0m\n");
     std::printf("  hardware threads      %u\n", hw);
+    {
+        // Every number below is a median, which survives a stray spike but not
+        // a machine that is busy for the whole run. Saying so beats publishing
+        // a figure that was really a measurement of something else.
+        double load[3] = {0, 0, 0};
+        if (getloadavg(load, 3) == 3) {
+            const double busy = load[0] / std::max(1.0, static_cast<double>(hw));
+            std::printf("  machine load          %.2f, %.2f, %.2f%s\n", load[0], load[1], load[2],
+                        busy > 0.5 ? "   \033[1mbusy: treat every timing here as an upper bound\033[0m" : "");
+        }
+    }
     std::printf("  job system threads    %d (%d workers + caller)\n", jobs.threadCount(), jobs.workerCount());
     std::printf("  entities              %d\n", config.entityCount);
     std::printf("  renderables           %d\n", config.renderableCount);
