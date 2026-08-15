@@ -60,9 +60,9 @@ thieves. The submitting thread participates rather than blocking, so nested
 `parallelFor` calls make progress instead of deadlocking. A parallel pass
 queues one task per worker, not one per chunk, and the chunks are handed out
 through an atomic cursor: the queue mutex and the `std::function` allocation
-are paid once per thread instead of once per chunk, which took a 64-chunk
-dispatch from 34.5 µs to 3.2 µs. That floor matters because the coloured solver
-pays it once per colour per iteration.
+are paid once per thread instead of once per chunk, which holds a 64-chunk
+dispatch at **0.8 µs** — the same cost as a 2-chunk one. That floor matters
+because the coloured solver pays it once per colour per iteration.
 
 **Renderer** — OpenGL 4.1 core against the macOS system framework, so no
 loader library. Culling produces a counting-sorted run of `(mesh, material)`
@@ -129,7 +129,7 @@ The same grid answers ray queries: `PhysicsWorld::raycast` walks it cell by cell
 and stops as soon as the nearest hit lies inside the cell it is walking, since a
 body is registered in every cell it overlaps and a closer hit would have been
 found in a cell already visited. 4,096 rays into the 30,000-body field cost
-**0.38 µs each** (2.65 M rays/s) against 80.6 µs for testing every body — 213x.
+**0.37 µs each** (2.74 M rays/s) against 74.2 µs for testing every body — 203x.
 A test checks 400 random rays against an O(n) reference. `overlapSphere`
 answers area queries off the same grid, and both are bound into Lua as
 `skein.raycast` and `skein.overlap_sphere`.
@@ -163,11 +163,15 @@ that errors is unbound and reported instead of killing the frame.
 
 Apple M3, 8 hardware threads, macOS 26.6, Apple clang `-O2`, OpenGL 4.1 (Metal
 90.5). CPU figures are medians over 40 runs from `skein_bench`; render figures
-are means over 200 frames from `skein_demo --capture 200`.
+are means over 200 frames from `skein_demo --capture 200`. Every timed sample
+checks `ru_nivcsw` on either side of itself and is discarded if the scheduler
+preempted the thread mid-measurement, so a loaded machine costs coverage rather
+than accuracy; the run behind these tables kept 639 of 3,438 samples and the
+header prints the drop rate and the load average alongside them.
 
 Both harnesses build the same world from `Demo::build`: **112,025 entities**,
 100,000 of them integrating position and rotation every frame, **37,000
-renderable**, 30,000 rigid bodies piled densely enough to generate ~62,000
+renderable**, 30,000 rigid bodies piled densely enough to generate ~60,000
 contacts a step, 25 lights, 6 meshes, 6 materials, 31.6 MB resident. The
 interactive demo also runs `assets/scripts/demo.lua` on top, which adds 316
 scripted entities — 112,341 entities and 37,316 renderables in the render
@@ -177,18 +181,18 @@ table below.
 
 | Pass | 1 thread | 8 threads | Speedup |
 |---|---|---|---|
-| ECS iteration (100k integrate) | 0.776 ms — 7.8 ns/entity | 0.242 ms — 2.4 ns/entity | 3.20x |
-| Transform hierarchy (112k) | 0.765 ms — 6.8 ns/entity | 0.425 ms — 3.8 ns/entity | 1.80x |
-| Physics step (30k bodies, 62k contacts) | 16.18 ms — 539 ns/body | 6.80 ms — 227 ns/body | 2.38x |
-| Cull + batch (37k candidates) | 0.583 ms — 15.8 ns/object | 0.371 ms — 10.0 ns/object | 1.57x |
-| **Full simulation frame** | **18.40 ms (54 fps)** | **6.93 ms (144 fps)** | **2.66x** |
+| ECS iteration (100k integrate) | 0.679 ms — 6.8 ns/entity | 0.176 ms — 1.8 ns/entity | 3.86x |
+| Transform hierarchy (112k) | 0.756 ms — 6.8 ns/entity | 0.334 ms — 3.0 ns/entity | 2.26x |
+| Physics step (30k bodies, 60k contacts) | 17.13 ms — 571 ns/body | 6.23 ms — 208 ns/body | 2.75x |
+| Cull + batch (37k candidates) | 0.600 ms — 16.2 ns/object | 0.376 ms — 10.2 ns/object | 1.60x |
+| **Full simulation frame** | **19.60 ms (51 fps)** | **7.20 ms (139 fps)** | **2.72x** |
 
 Thread scaling on the full simulation frame:
 
 | Threads | 1 | 2 | 3 | 4 | 6 | 8 |
 |---|---|---|---|---|---|---|
-| ms | 18.40 | 9.48 | 6.98 | 5.68 | 6.28 | 6.13 |
-| speedup | 1.00x | 1.94x | 2.64x | 3.24x | 2.93x | 3.00x |
+| ms | 17.96 | 10.22 | 7.78 | 6.41 | 6.95 | 7.00 |
+| speedup | 1.09x | 1.92x | 2.52x | 3.06x | 2.82x | 2.80x |
 
 Scaling flattens past four threads because the M3's four efficiency cores are
 roughly a third the throughput of its performance cores, and because the
@@ -198,21 +202,21 @@ Where the frame actually goes, from the built-in profiler at 8 threads:
 
 | Zone | avg | p95 |
 |---|---|---|
-| physics/solve | 2.54 ms | 3.31 ms |
-| physics/narrowphase | 1.86 ms | 2.10 ms |
-| physics/broadphase | 0.90 ms | 1.01 ms |
-| scene/updateTransforms | 0.63 ms | 0.72 ms |
-| physics/impulseCache | 0.29 ms | 0.38 ms |
-| render/cull | 0.27 ms | 0.36 ms |
-| physics/gather | 0.26 ms | 0.27 ms |
-| physics/color | 0.25 ms | 0.27 ms |
-| ecs/kinematics | 0.24 ms | 0.31 ms |
-| physics/impulseStore | 0.22 ms | 0.28 ms |
-| physics/scatter | 0.09 ms | 0.12 ms |
-| physics/sleep | 0.04 ms | 0.07 ms |
-| render/clusterBounds | 0.04 ms | 0.07 ms |
-| physics/integrate | 0.03 ms | 0.05 ms |
-| render/batchSort | 0.03 ms | 0.06 ms |
+| physics/solve | 2.79 ms | 3.07 ms |
+| physics/narrowphase | 1.77 ms | 2.01 ms |
+| physics/broadphase | 1.04 ms | 1.13 ms |
+| scene/updateTransforms | 0.69 ms | 0.83 ms |
+| physics/impulseCache | 0.36 ms | 0.49 ms |
+| render/cull | 0.30 ms | 0.39 ms |
+| physics/gather | 0.27 ms | 0.32 ms |
+| ecs/kinematics | 0.26 ms | 0.37 ms |
+| physics/impulseStore | 0.26 ms | 0.32 ms |
+| physics/color | 0.23 ms | 0.24 ms |
+| physics/scatter | 0.10 ms | 0.12 ms |
+| physics/integrate | 0.04 ms | 0.08 ms |
+| physics/sleep | 0.04 ms | 0.08 ms |
+| render/clusterBounds | 0.04 ms | 0.06 ms |
+| render/batchSort | 0.04 ms | 0.04 ms |
 
 ### Cluster culling over Morton-ordered pools
 
@@ -231,13 +235,13 @@ instead of through the sparse map.
 
 | | Flat, one test per object | Clustered over Morton order |
 |---|---|---|
-| Cull + batch | 0.296 ms — 8.0 ns/object | **0.220 ms — 5.9 ns/object (1.35x)** |
-| Objects individually tested | 37,000 | **4,672 (87.4% resolved by their cluster)** |
+| Cull + batch | 0.330 ms — 8.9 ns/object | **0.239 ms — 6.4 ns/object (1.39x)** |
+| Objects individually tested | 37,000 | **4,736 (87.2% resolved by their cluster)** |
 | Visible | 25,224 | 25,224 |
 
 Cluster verdicts for that frame: 290 clusters — 55 outside, 154 inside, 81
 straddling; the straddling ones break into 2,313 sub-clusters of which 171 are
-outside and 185 fully inside.
+outside and 181 fully inside.
 
 Objects drift out of Morton order as they move, so `CullSystem::maintain()`
 rebuilds the cluster bounds, compares the mean cluster size against what it was
@@ -246,8 +250,8 @@ threshold. Over 800 frames of continuous motion:
 
 | | Median cull | Order decay | Re-sorts | Objects tested |
 |---|---|---|---|---|
-| Sorted once | 0.280 ms | 1.72x | 1 | 10,848 |
-| Maintained every 30 frames | 0.274 ms | **1.01x** | 2 | **4,896** |
+| Sorted once | 0.310 ms | 1.71x | 1 | 10,864 |
+| Maintained every 30 frames | 0.291 ms | **1.01x** | 2 | **4,960** |
 
 The win depends on how much of the scene is on screen — clustering has nothing
 to skip when everything is visible-adjacent, and nothing to gain when a cheap
@@ -255,11 +259,11 @@ sphere test already rejects everything:
 
 | Camera | Visible | Flat | Clustered |
 |---|---|---|---|
-| Tight, looking away | 0.0% | 0.046 ms | 0.046 ms (0.99x) |
-| Narrow fov into the field | 51.5% | 0.202 ms | 0.168 ms (1.21x) |
-| Default view | 68.2% | 0.248 ms | 0.193 ms (1.29x) |
-| Inside the field, looking down | 92.9% | 0.316 ms | 0.246 ms (1.29x) |
-| Far back, whole field in view | 100.0% | 0.335 ms | 0.227 ms (1.47x) |
+| Tight, looking away | 0.0% | 0.039 ms | 0.041 ms (0.94x) |
+| Narrow fov into the field | 51.5% | 0.226 ms | 0.170 ms (1.32x) |
+| Default view | 68.2% | 0.286 ms | 0.204 ms (1.40x) |
+| Inside the field, looking down | 92.9% | 0.328 ms | 0.263 ms (1.25x) |
+| Far back, whole field in view | 100.0% | 0.370 ms | 0.289 ms (1.28x) |
 
 When nothing is on screen the sphere prepass already rejects everything and the
 cluster tests are pure overhead, which is the one case clustering loses.
@@ -273,17 +277,17 @@ arrays the way the ECS stores them.
 
 | | Time | Per object | |
 |---|---|---|---|
-| Virtual call, pointer per object | 5.041 ms | 25.2 ns | 184 B/object |
-| Contiguous objects, direct call | 1.334 ms | 6.7 ns | **3.78x** |
-| Component arrays | 1.344 ms | 6.7 ns | **3.75x** |
-| Position only, contiguous objects | 0.587 ms | 2.9 ns | |
-| Position only, component arrays | **0.073 ms** | **0.4 ns** | **8.02x** |
+| Virtual call, pointer per object | 4.820 ms | 24.1 ns | 184 B/object |
+| Contiguous objects, direct call | 1.359 ms | 6.8 ns | **3.55x** |
+| Component arrays | 1.357 ms | 6.8 ns | **3.55x** |
+| Position only, contiguous objects | 0.562 ms | 2.8 ns | |
+| Position only, component arrays | **0.075 ms** | **0.4 ns** | **7.51x** |
 
-Most of the first 3.8x is dispatch and pointer chasing, not layout — with the
+Most of the first 3.6x is dispatch and pointer chasing, not layout — with the
 whole object touched, contiguous AoS keeps up with component arrays because the
 quaternion math dominates. Layout only separates them when a pass touches part
 of an object: reading two fields walks 9.9 MB out of component arrays instead of
-dragging 35.1 MB of cache lines, and that is worth 8.0x.
+dragging 35.1 MB of cache lines, and that is worth 7.5x.
 
 ### Scaling to a million entities
 
@@ -293,14 +297,14 @@ compare like for like:
 
 | Entities | Build | ECS iterate | Hierarchy | Cull flat | Cull clustered |
 |---|---|---|---|---|---|
-| 25,000 | 3.6 ms | 0.126 ms | 0.115 ms | 0.137 ms | 0.108 ms (1.26x) |
-| 100,000 | 12.1 ms | 0.224 ms | 0.342 ms | 0.325 ms | 0.279 ms (1.17x) |
-| 250,000 | 31.6 ms | 0.511 ms | 0.997 ms | 0.851 ms | 0.553 ms (1.54x) |
-| 500,000 | 62.2 ms | 1.106 ms | 2.296 ms | 1.944 ms | 1.228 ms (1.58x) |
-| 1,000,000 | 139.8 ms | 2.147 ms | 5.427 ms | 4.773 ms | 2.926 ms (1.63x) |
+| 25,000 | 3.4 ms | 0.106 ms | 0.118 ms | 0.137 ms | 0.084 ms (1.62x) |
+| 100,000 | 11.7 ms | 0.180 ms | 0.287 ms | 0.368 ms | 0.282 ms (1.30x) |
+| 250,000 | 32.8 ms | 0.573 ms | 0.947 ms | 0.981 ms | 0.535 ms (1.83x) |
+| 500,000 | 61.8 ms | 1.227 ms | 2.430 ms | 2.205 ms | 1.305 ms (1.69x) |
+| 1,000,000 | 135.7 ms | 2.392 ms | 5.004 ms | 4.244 ms | 2.547 ms (1.67x) |
 
-At a million entities the ECS integrate pass is 2.1 ns per entity and 433,333
-renderables cull and batch in 2.9 ms, with the clustered and flat paths
+At a million entities the ECS integrate pass is 2.4 ns per entity and 433,333
+renderables cull and batch in 2.5 ms, with the clustered and flat paths
 agreeing on the visible set at every size.
 
 ### What warm starting buys a stack
@@ -310,10 +314,10 @@ measured by where the top sphere ended up. A perfect stack puts it at 7.50.
 
 | Solver iterations | Cold | Warm started |
 |---|---|---|
-| 2 | 3.68 — 45% of the stack standing | 7.25 — **96%** |
-| 4 | 6.14 — 81% | 7.35 — **98%** |
-| 8 | 7.24 — 96% | 7.41 — **99%** |
-| 16 | 7.39 — 98% | 7.43 — **99%** |
+| 2 | 3.76 — 47% of the stack standing | 7.34 — **98%** |
+| 4 | 6.28 — 83% | 7.41 — **99%** |
+| 8 | 7.34 — 98% | 7.43 — **99%** |
+| 16 | 7.43 — 99% | 7.45 — **99%** |
 
 A cold solver needs eight iterations to reach what warm starting reaches in
 two, because the reaction holding a column up travels one contact per
@@ -335,8 +339,8 @@ is work, not parallelism:
 
 | Scene | Sleeping off | Sleeping on | |
 |---|---|---|---|
-| 4,000 in a box, 30 s to settle | 1.55 ms — 4,000 awake, 12,082 contacts | **0.29 ms** — 110 awake, 511 contacts | **5.45x** |
-| 30,000 demo field, still churning | 14.69 ms — 30,000 awake | 14.90 ms — 27,455 awake | 0.99x |
+| 4,000 in a box, 30 s to settle | 1.82 ms — 4,000 awake, 11,725 contacts | **0.24 ms** — 18 awake, 76 contacts | **7.48x** |
+| 30,000 demo field, still churning | 18.35 ms — 30,000 awake | 17.96 ms — 22,626 awake | 1.02x |
 
 The second row is the point of the first: a pile that never settles pays only
 the bookkeeping for a feature it cannot use.
@@ -349,11 +353,11 @@ left for 20 s, then every one of the 2M pairs checked directly:
 
 | Solver | Step | Worst overlap | Mean overlap | Fastest body |
 |---|---|---|---|---|
-| 1 iteration, warm | 0.53 ms | 44.6% of a radius | 3.7% | 0.585 m/s |
-| 2 iterations, warm | 0.69 ms | 21.0% | 2.4% | 0.176 m/s |
-| 4 iterations, warm | 0.97 ms | 17.8% | 1.8% | 0.132 m/s |
-| 8 iterations, warm | 1.58 ms | **12.7%** | **1.4%** | **0.049 m/s** |
-| 2 iterations, cold | 0.61 ms | **130.8%** | 4.5% | 0.565 m/s |
+| 1 iteration, warm | 0.57 ms | 25.0% of a radius | 3.6% | 0.196 m/s |
+| 2 iterations, warm | 0.71 ms | 16.9% | 2.3% | 0.185 m/s |
+| 4 iterations, warm | 0.93 ms | 15.2% | 1.7% | **0.144 m/s** |
+| 8 iterations, warm | 1.71 ms | **10.9%** | **1.4%** | 0.162 m/s |
+| 2 iterations, cold | 0.65 ms | **170.0%** | 5.1% | 0.567 m/s |
 
 The last row is the one that matters: without warm starting, two iterations
 leave a pair fully inside each other and the pile still crawling at half a
@@ -367,11 +371,11 @@ which at the top speed is 3.7 m of travel in a 1/60 s step:
 
 | Contact test | Substep cap | Step cost | Passed through |
 |---|---|---|---|
-| discrete | 1 | 0.029 ms | 292 of 400 |
-| discrete | 4 | 0.183 ms | 85 of 400 |
+| discrete | 1 | 0.028 ms | 292 of 400 |
+| discrete | 4 | 0.158 ms | 85 of 400 |
 | discrete | 16 | 0.078 ms | **0 of 400** |
-| speculative | 1 | 0.068 ms | **0 of 400** |
-| speculative | 4 (the default) | 0.062 ms | **0 of 400** |
+| speculative | 1 | 0.072 ms | **0 of 400** |
+| speculative | 4 (the default) | 0.080 ms | **0 of 400** |
 
 A discrete test has to split the step sixteen ways to catch every shot.
 Speculative contacts catch all of them without splitting it at all: a moving
@@ -435,10 +439,10 @@ time on top.
 
 | | |
 |---|---|
-| Serialize 112,025 entities | 1.59 ms → 21.3 MB (13.1 GB/s) |
-| Deserialize | 3.97 ms (5.2 GB/s), entity ids preserved exactly |
-| Lua per-entity callbacks | 0.400 ms for 5,000 scripts — 79.9 ns/callback |
-| ECS pools / physics / culling / Lua heap | 28.0 MB / 23.6 MB / 917 KB / 385 KB |
+| Serialize 112,025 entities | 1.72 ms → 21.3 MB (12.1 GB/s) |
+| Deserialize | 4.24 ms (4.9 GB/s), entity ids preserved exactly |
+| Lua per-entity callbacks | 0.413 ms for 5,000 scripts — 82.7 ns/callback |
+| ECS pools / physics / culling / Lua heap | 28.0 MB / 28.6 MB / 917 KB / 385 KB |
 
 ## Demo controls
 
