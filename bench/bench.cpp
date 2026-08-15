@@ -251,6 +251,17 @@ int main(int argc, char** argv) {
                             static_cast<double>(std::max<uint64_t>(discretePairs, 1)) - 1.0)));
     }
     {
+        // Solving at the contact point instead of through the centres adds two
+        // crosses per axis per contact and an orientation integration per body.
+        demo.physics.settings.angularContacts = false;
+        Timing linear = measure(3, iterations / 2, [&] { demo.physics.step(demo.scene, 1.0f / 60.0f, &jobs); });
+        demo.physics.settings.angularContacts = true;
+        Timing spin = measure(3, iterations / 2, [&] { demo.physics.step(demo.scene, 1.0f / 60.0f, &jobs); });
+        row("linear contacts only", linear.median, "no contact torque, no orientation integration");
+        row("angular contacts", spin.median,
+            format("%+.1f%% for rotation", 100.0 * (spin.median / std::max(linear.median, 1e-9) - 1.0)));
+    }
+    {
         double allPairs = 0.5 * static_cast<double>(ps.bodies) * static_cast<double>(ps.bodies - 1);
         fact("broadphase pruning",
              format("%.0fx fewer than all-pairs (%.2e)",

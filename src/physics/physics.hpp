@@ -33,6 +33,11 @@ struct PhysicsSettings {
     /// being discovered after it has already gone through. Off is the naive
     /// discrete test, kept so the benchmark can measure the difference.
     bool speculativeContacts = true;
+    /// Solve contacts at the point they touch rather than through the centres,
+    /// so an off-centre hit spins the body. Off is the purely linear solver,
+    /// kept so the benchmark can measure what the rotation costs.
+    bool angularContacts = true;
+    float angularDamping = 0.05f;
     /// Coulomb friction coefficient shared by every contact.
     /// ponytail: global, move onto Collider when materials need to differ.
     float friction = 0.4f;
@@ -103,6 +108,10 @@ private:
         uint32_t a, b;
         Vec3 normal;
         float depth;
+        /// Where the pair touches, in world space. Only read when the angular
+        /// solver is on, but computing it is a few adds inside a test that has
+        /// already found everything it needs.
+        Vec3 point;
     };
 
     void gather(Scene& scene);
@@ -122,6 +131,12 @@ private:
     std::vector<Entity> entity_;
     std::vector<Vec3> position_;
     std::vector<Vec3> velocity_;
+    std::vector<Vec3> angular_;
+    std::vector<Quat> orientation_;
+    /// Isotropic inverse inertia: one scalar rather than a tensor.
+    /// ponytail: a long box therefore tumbles like a ball of the same size;
+    /// store the diagonal and rotate it if elongated bodies ever matter.
+    std::vector<float> invInertia_;
     std::vector<Vec3> pseudo_;
     std::vector<Vec3> halfExtent_;
     std::vector<float> radius_;

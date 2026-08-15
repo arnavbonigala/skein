@@ -19,6 +19,11 @@ constexpr float kSlop = 0.005f;
 /// and the speed that push is allowed to reach.
 constexpr float kCorrection = 0.35f;
 constexpr float kMaxSeparation = 2.0f;
+/// Fraction of the normal impulse a contact may spend resisting the pair's
+/// relative spin. Sliding friction cannot stop a ball that is already rolling —
+/// the contact point is stationary — so without this a pile of spheres jostles
+/// forever and never sleeps.
+constexpr float kRollingFriction = 0.25f;
 /// Overlap a sleeping body refuses to tolerate.
 // ponytail: absolute, not relative to body size; scale it by radius if scenes
 // ever mix boulders with pebbles.
@@ -90,6 +95,9 @@ void PhysicsWorld::gather(Scene& scene) {
     entity_.resize(n);
     position_.resize(n);
     velocity_.resize(n);
+    angular_.resize(n);
+    orientation_.resize(n);
+    invInertia_.resize(n);
     halfExtent_.resize(n);
     radius_.resize(n);
     invMass_.resize(n);
@@ -116,6 +124,8 @@ void PhysicsWorld::gather(Scene& scene) {
         entity_[m] = e;
         position_[m] = t->position;
         velocity_[m] = linear;
+        angular_[m] = v ? v->angular : Vec3{0, 0, 0};
+        orientation_[m] = t->rotation;
         halfExtent_[m] = c.halfExtents * s;
         radius_[m] = c.radius * s;
         invMass_[m] = c.invMass;
@@ -131,6 +141,10 @@ void PhysicsWorld::gather(Scene& scene) {
         float reach = c.kind == static_cast<uint32_t>(ColliderKind::Sphere) ? c.radius * s
                                                                            : length(c.halfExtents * s);
         reach_[m] = reach;
+        // Inertia of a solid sphere of the collider's own reach, which is the
+        // one number that makes contact torque behave: too small and a graze
+        // spins the body up out of nothing, too large and nothing ever tumbles.
+        invInertia_[m] = c.invMass > 0.0f && reach > 0.0f ? c.invMass / (0.4f * reach * reach) : 0.0f;
         maxReach_ = std::max(maxReach_, reach);
         reachSum += reach;
         // Tunneling is bounded by the thinnest dimension in the world, not by
@@ -147,6 +161,9 @@ void PhysicsWorld::gather(Scene& scene) {
         entity_.resize(m);
         position_.resize(m);
         velocity_.resize(m);
+        angular_.resize(m);
+        orientation_.resize(m);
+        invInertia_.resize(m);
         halfExtent_.resize(m);
         radius_.resize(m);
         invMass_.resize(m);
@@ -164,12 +181,19 @@ void PhysicsWorld::integrate(float dt, JobSystem* jobs) {
     size_t n = position_.size();
     const Vec3 g = settings.gravity;
     const float damp = std::max(0.0f, 1.0f - settings.linearDamping * dt);
+    const float spinDamp = std::max(0.0f, 1.0f - settings.angularDamping * dt);
+    const bool angular = settings.angularContacts;
     auto body = [&](size_t begin, size_t end) {
         for (size_t i = begin; i < end; ++i) {
             if (asleep_[i]) continue;
             if (invMass_[i] > 0.0f) velocity_[i] += g * dt;
             velocity_[i] *= damp;
             position_[i] += velocity_[i] * dt;
+            if (!angular) continue;
+            angular_[i] *= spinDamp;
+            float speed = length(angular_[i]);
+            if (speed > 1e-6f)
+                orientation_[i] = normalize(Quat::axisAngle(angular_[i] / speed, speed * dt) * orientation_[i]);
         }
     };
     if (jobs && n >= 4096)
@@ -322,6 +346,7 @@ void PhysicsWorld::findContacts(JobSystem* jobs) {
             float dist = std::sqrt(dist2);
             out.normal = d / dist;
             out.depth = rsum - dist;
+            out.point = position_[i] + out.normal * (radius_[i] - 0.5f * out.depth);
             return true;
         }
         if (boxA && boxB) {
@@ -333,6 +358,17 @@ void PhysicsWorld::findContacts(JobSystem* jobs) {
             nrm[axis] = d[axis] < 0 ? -1.0f : 1.0f;
             out.normal = nrm;
             out.depth = overlap[axis] - margin;
+            // Middle of the overlap slab on the separating axis, and the middle
+            // of the shared span on the other two: one point standing in for a
+            // face contact, which is what makes a stack of boxes settle flat
+            // instead of pivoting about a corner.
+            Vec3 p;
+            for (int k = 0; k < 3; ++k) {
+                float loA = position_[i][k] - halfExtent_[i][k], hiA = position_[i][k] + halfExtent_[i][k];
+                float loB = position_[j][k] - halfExtent_[j][k], hiB = position_[j][k] + halfExtent_[j][k];
+                p[k] = 0.5f * (std::max(loA, loB) + std::min(hiA, hiB));
+            }
+            out.point = p;
             return true;
         }
         size_t s = boxA ? j : i;
@@ -365,6 +401,7 @@ void PhysicsWorld::findContacts(JobSystem* jobs) {
             out.normal = -nrm;
         }
         out.depth = depth;
+        out.point = position_[b] + clamped;
         return true;
     };
 
@@ -412,7 +449,7 @@ void PhysicsWorld::findContacts(JobSystem* jobs) {
                         // the step skips would leave velocity nobody applies.
                         if (asleep_[i] && asleep_[j]) {
                             if (!audit) continue;
-                            Contact probe{i, j, Vec3{0, 1, 0}, 0};
+                            Contact probe{i, j, Vec3{0, 1, 0}, 0, Vec3{0, 0, 0}};
                             if (narrow(i, j, probe, 0.0f) && probe.depth > kWakeDepth) {
                                 // The timer has to go back with the flag: this
                                 // pair contributes no contact this step, so
@@ -432,7 +469,7 @@ void PhysicsWorld::findContacts(JobSystem* jobs) {
                             ++localDuplicates;
                             continue;
                         }
-                        Contact contact{i, j, Vec3{0, 1, 0}, 0};
+                        Contact contact{i, j, Vec3{0, 1, 0}, 0, Vec3{0, 0, 0}};
                         if (!narrow(i, j, contact, sweep_[i] + sweep_[j])) continue;
                         // Only a body that is actually moving wakes a sleeper,
                         // or one jittering body would cascade through a settled
@@ -507,6 +544,7 @@ void PhysicsWorld::colorContacts() {
 
 void PhysicsWorld::solveRange(uint32_t begin, uint32_t end, bool positional, float invDt) {
     const float friction = settings.friction;
+    const bool angular = settings.angularContacts;
     for (uint32_t idx = begin; idx < end; ++idx) {
         const uint32_t k = colorOrder_[idx];
         const Contact& c = contacts_[k];
@@ -514,8 +552,30 @@ void PhysicsWorld::solveRange(uint32_t begin, uint32_t end, bool positional, flo
         float imB = invMass_[c.b];
         float imSum = imA + imB;
         if (imSum <= 0.0f) continue;
-        Vec3 rel = velocity_[c.b] - velocity_[c.a];
+        const float iiA = angular ? invInertia_[c.a] : 0.0f;
+        const float iiB = angular ? invInertia_[c.b] : 0.0f;
+        const Vec3 rA = angular ? c.point - position_[c.a] : Vec3{0, 0, 0};
+        const Vec3 rB = angular ? c.point - position_[c.b] : Vec3{0, 0, 0};
+        // Velocity of the touching points, not of the centres: an impulse at
+        // arm's length is what turns a glancing hit into a spin.
+        auto pointVel = [&](uint32_t body, const Vec3& r, float ii) {
+            return ii > 0.0f ? velocity_[body] + cross(angular_[body], r) : velocity_[body];
+        };
+        // Effective mass along an axis, including how much the pair resists
+        // being rotated by an impulse there.
+        auto effMass = [&](const Vec3& u) {
+            Vec3 ca = cross(rA, u), cb = cross(rB, u);
+            return imSum + iiA * length2(ca) + iiB * length2(cb);
+        };
+        auto applyImpulse = [&](const Vec3& j) {
+            if (imA > 0.0f) velocity_[c.a] -= j * imA;
+            if (imB > 0.0f) velocity_[c.b] += j * imB;
+            if (iiA > 0.0f) angular_[c.a] -= cross(rA, j) * iiA;
+            if (iiB > 0.0f) angular_[c.b] += cross(rB, j) * iiB;
+        };
+        Vec3 rel = pointVel(c.b, rB, iiB) - pointVel(c.a, rA, iiA);
         float vn = dot(rel, c.normal);
+        const float normalMass = angular ? effMass(c.normal) : imSum;
 
         // The bounce target is fixed before the first iteration, or accumulating
         // impulses would cancel the restitution back out on the next pass.
@@ -523,18 +583,14 @@ void PhysicsWorld::solveRange(uint32_t begin, uint32_t end, bool positional, flo
         // pair may close exactly the distance between them and no more, which
         // lands the body on the surface instead of inside it or past it.
         float separation = c.depth < 0.0f ? -c.depth * invDt : 0.0f;
-        float lambda = -(vn - restitutionBias_[k] + separation) / imSum;
+        float lambda = -(vn - restitutionBias_[k] + separation) / normalMass;
         // The accumulated impulse is what can be clamped against zero and
         // carried into the next frame; a per-iteration impulse cannot.
         float& total = normalImpulse_[k];
         float previous = total;
         total = std::max(previous + lambda, 0.0f);
         float applied = total - previous;
-        if (applied != 0.0f) {
-            Vec3 impulse = c.normal * applied;
-            if (imA > 0.0f) velocity_[c.a] -= impulse * imA;
-            if (imB > 0.0f) velocity_[c.b] += impulse * imB;
-        }
+        if (applied != 0.0f) applyImpulse(c.normal * applied);
 
         // Coulomb friction along the contact tangent, bounded by the normal
         // impulse holding the pair together. Without it a pile of frictionless
@@ -544,16 +600,32 @@ void PhysicsWorld::solveRange(uint32_t begin, uint32_t end, bool positional, flo
         // together. Recomputing it from scratch each iteration cannot hold a
         // slope: the correction it applied last iteration is invisible to it.
         {
-            rel = velocity_[c.b] - velocity_[c.a];
+            rel = pointVel(c.b, rB, iiB) - pointVel(c.a, rA, iiA);
             Vec3 slide = rel - c.normal * dot(rel, c.normal);
-            Vec3 want = tangentImpulse_[k] - slide / imSum;
+            float sl = length(slide);
+            // The tangent mass belongs to the direction the pair is actually
+            // sliding in; the two in-plane axes do not resist a spin equally.
+            float tangentMass = angular && sl > 1e-9f ? effMass(slide / sl) : imSum;
+            Vec3 want = tangentImpulse_[k] - slide / tangentMass;
             float limit = friction * total;
             float wl = length(want);
             if (wl > limit) want = wl > 1e-12f ? want * (limit / wl) : Vec3{0, 0, 0};
             Vec3 applyT = want - tangentImpulse_[k];
             tangentImpulse_[k] = want;
-            if (imA > 0.0f) velocity_[c.a] -= applyT * imA;
-            if (imB > 0.0f) velocity_[c.b] += applyT * imB;
+            applyImpulse(applyT);
+        }
+
+        if (angular && total > 0.0f) {
+            Vec3 spin = angular_[c.b] - angular_[c.a];
+            float wl = length(spin);
+            float iiSum = iiA + iiB;
+            if (wl > 1e-9f && iiSum > 0.0f) {
+                float budget = kRollingFriction * total * 0.5f * (reach_[c.a] + reach_[c.b]);
+                float applyR = std::min(wl / iiSum, budget);
+                Vec3 dir = spin / wl;
+                angular_[c.a] += dir * (applyR * iiA);
+                angular_[c.b] -= dir * (applyR * iiB);
+            }
         }
 
         if (positional) {
@@ -584,6 +656,9 @@ void PhysicsWorld::warmStart(uint32_t begin, uint32_t end) {
         Vec3 impulse = c.normal * p + tangentImpulse_[k];
         if (invMass_[c.a] > 0.0f) velocity_[c.a] -= impulse * invMass_[c.a];
         if (invMass_[c.b] > 0.0f) velocity_[c.b] += impulse * invMass_[c.b];
+        if (!settings.angularContacts) continue;
+        if (invInertia_[c.a] > 0.0f) angular_[c.a] -= cross(c.point - position_[c.a], impulse) * invInertia_[c.a];
+        if (invInertia_[c.b] > 0.0f) angular_[c.b] += cross(c.point - position_[c.b], impulse) * invInertia_[c.b];
     }
 }
 
@@ -627,7 +702,12 @@ void PhysicsWorld::loadCachedImpulses(JobSystem* jobs) {
             // and restitution stays out of it, or the body would be turned
             // around before it ever arrived; the approach speed is carried
             // forward instead and spent on the frame the two actually meet.
-            float vn = dot(velocity_[contacts_[i].b] - velocity_[contacts_[i].a], contacts_[i].normal);
+            const Contact& ci = contacts_[i];
+            Vec3 pa = settings.angularContacts ? velocity_[ci.a] + cross(angular_[ci.a], ci.point - position_[ci.a])
+                                               : velocity_[ci.a];
+            Vec3 pb = settings.angularContacts ? velocity_[ci.b] + cross(angular_[ci.b], ci.point - position_[ci.b])
+                                               : velocity_[ci.b];
+            float vn = dot(pb - pa, ci.normal);
             float approach = std::max(-vn, foundApproach);
             if (contacts_[i].depth < 0.0f) {
                 restitutionBias_[i] = 0.0f;
@@ -709,11 +789,29 @@ void PhysicsWorld::solveBounds(size_t begin, size_t end, float invDt) {
                 // The wall carries the whole normal impulse, so its friction
                 // budget is what stops bodies skating along the floor forever.
                 float budget = friction * (-vn);
+                Vec3 stopped{0, 0, 0};
                 for (int t = 0; t < 3; ++t) {
                     if (t == axis) continue;
                     float& vt = velocity_[i][t];
                     float mag = std::abs(vt);
+                    float before = vt;
                     vt = mag <= budget ? 0.0f : vt - std::copysign(budget, vt);
+                    stopped[t] = vt - before;
+                }
+                // The wall takes that velocity away at the body's surface, not
+                // at its centre, so a ball that skids across the floor leaves
+                // rolling instead of sliding to a dead stop.
+                if (settings.angularContacts && invInertia_[i] > 0.0f) {
+                    Vec3 arm{0, 0, 0};
+                    arm[axis] = -sign * r;
+                    angular_[i] += cross(arm, stopped / invMass_[i]) * invInertia_[i];
+                    // A ball rolling along the floor has a stationary contact
+                    // point, so sliding friction never touches it again. The
+                    // same budget spent against the spin is what brings it to
+                    // rest instead of letting it roll out of the scene.
+                    float spinBudget = kRollingFriction * (-vn) / r;
+                    float wl = length(angular_[i]);
+                    angular_[i] = wl <= spinBudget ? Vec3{0, 0, 0} : angular_[i] * (1.0f - spinBudget / wl);
                 }
             }
             // Being buried in a wall counts the same as being buried in
@@ -822,7 +920,10 @@ void PhysicsWorld::updateSleep(float dt, JobSystem* jobs) {
             // still it looks: freezing it there would leave the overlap
             // permanent, since sleepers no longer push each other apart.
             const bool separating = deepest_[i] > kWakeDepth;
-            if (length2(velocity_[i]) > threshold || separating) {
+            // Spin has to count, or a body left rotating in place is declared
+            // asleep and then frozen mid-turn.
+            const float spin2 = settings.angularContacts ? length2(angular_[i]) * reach_[i] * reach_[i] : 0.0f;
+            if (length2(velocity_[i]) > threshold || spin2 > threshold || separating) {
                 sleepTimer_[i] = 0.0f;
                 asleep_[i] = 0;
             } else {
@@ -830,6 +931,7 @@ void PhysicsWorld::updateSleep(float dt, JobSystem* jobs) {
                 if (sleepTimer_[i] >= settings.sleepTime) {
                     asleep_[i] = 1;
                     velocity_[i] = Vec3{0, 0, 0};
+                    angular_[i] = Vec3{0, 0, 0};
                 }
             }
             if (!asleep_[i]) ++localAwake;
@@ -850,8 +952,14 @@ void PhysicsWorld::scatter(Scene& scene, JobSystem* jobs) {
     Pool<Collider>& colliders = scene.world.pool<Collider>();
     auto write = [&](size_t begin, size_t end) {
         for (size_t i = begin; i < end; ++i) {
-            if (Transform* t = transforms.tryGet(entity_[i])) t->position = position_[i];
-            if (Velocity* v = velocities.tryGet(entity_[i])) v->linear = velocity_[i];
+            if (Transform* t = transforms.tryGet(entity_[i])) {
+                t->position = position_[i];
+                if (settings.angularContacts) t->rotation = orientation_[i];
+            }
+            if (Velocity* v = velocities.tryGet(entity_[i])) {
+                v->linear = velocity_[i];
+                if (settings.angularContacts) v->angular = angular_[i];
+            }
             if (Collider* c = colliders.tryGet(entity_[i])) {
                 c->sleepTimer = sleepTimer_[i];
                 c->asleep = asleep_[i];
@@ -1074,7 +1182,9 @@ void PhysicsWorld::overlapSphere(const Vec3& center, float radius, std::vector<E
 
 size_t PhysicsWorld::bytesUsed() const {
     auto bytes = [](const auto& v) { return v.capacity() * sizeof(typename std::decay_t<decltype(v)>::value_type); };
-    size_t total = bytes(entity_) + bytes(position_) + bytes(velocity_) + bytes(pseudo_) + bytes(halfExtent_) +
+    size_t total = bytes(entity_) + bytes(position_) + bytes(velocity_) + bytes(angular_) +
+                   bytes(orientation_) + bytes(invInertia_) + bytes(tangentImpulse_) + bytes(approach_) +
+                   bytes(sweep_) + bytes(pseudo_) + bytes(halfExtent_) +
                    bytes(radius_) + bytes(invMass_) + bytes(restitution_) + bytes(kind_) + bytes(sleepTimer_) +
                    bytes(asleep_) + bytes(deepest_) + bytes(reach_) + bytes(bodyLo_) + bytes(bodyHi_) +
                    bytes(entryOffset_) + bytes(entryBucket_) + bytes(cellStart_) + bytes(entries_) +

@@ -705,3 +705,69 @@ TEST(overlap_sphere_matches_brute_force) {
     }
     CHECK(totalFound > 100);
 }
+
+TEST(an_off_centre_hit_spins_the_body_it_lands_on) {
+    // A shot that arrives along +x but half a radius high hits above the
+    // target's centre, so the target has to start turning about -z as well as
+    // moving. Through the centres there is no arm and no rotation at all.
+    auto run = [](bool angular) {
+        Scene scene;
+        Entity target = spawnSphere(scene, Vec3{0, 10, 0}, Vec3{0, 0, 0}, 0.5f);
+        spawnSphere(scene, Vec3{-4, 10.5f, 0}, Vec3{30, 0, 0}, 0.5f);
+        PhysicsWorld physics;
+        physics.settings.gravity = Vec3{0, 0, 0};
+        physics.settings.useBounds = false;
+        physics.settings.angularContacts = angular;
+        for (int i = 0; i < 30; ++i) physics.step(scene, 1.0f / 120.0f, nullptr);
+        return scene.world.get<Velocity>(target);
+    };
+
+    Velocity spun = run(true);
+    Velocity flat = run(false);
+    CHECK(spun.linear.x > 1.0f);
+    CHECK(spun.angular.z < -0.5f);
+    CHECK(std::abs(spun.angular.x) < 0.05f && std::abs(spun.angular.y) < 0.05f);
+    CHECK(flat.linear.x > 1.0f);
+    CHECK(length(flat.angular) == 0.0f);
+}
+
+TEST(a_sphere_skidding_on_the_floor_ends_up_rolling_and_then_stops) {
+    Scene scene;
+    const float r = 0.5f;
+    Entity ball = spawnSphere(scene, Vec3{0, r, 0}, Vec3{6, 0, 0}, r);
+    PhysicsWorld physics;
+    physics.settings.boundsMin = Vec3{-200, 0, -200};
+    physics.settings.boundsMax = Vec3{200, 40, 200};
+    physics.settings.allowSleep = false;
+
+    for (int i = 0; i < 60; ++i) physics.step(scene, 1.0f / 120.0f, nullptr);
+    const Velocity& rolling = scene.world.get<Velocity>(ball);
+    // Friction at the floor turns forward motion into spin about -z, and it
+    // stops taking anything once the contact point has stopped sliding.
+    CHECK(rolling.angular.z < -1.0f);
+    float slip = rolling.linear.x + rolling.angular.z * r;
+    CHECK(std::abs(slip) < 0.5f * rolling.linear.x);
+
+    for (int i = 0; i < 2000; ++i) physics.step(scene, 1.0f / 120.0f, nullptr);
+    const Velocity& stopped = scene.world.get<Velocity>(ball);
+    CHECK(length(stopped.linear) < 0.2f);
+    CHECK(length(stopped.angular) < 0.4f);
+    // Rolling resistance is not allowed to run the motion backwards.
+    CHECK(scene.world.get<Transform>(ball).position.x > 0.0f);
+}
+
+TEST(contact_torque_leaves_the_orientation_it_produced_on_the_transform) {
+    Scene scene;
+    Entity ball = spawnSphere(scene, Vec3{0, 0.5f, 0}, Vec3{5, 0, 0}, 0.5f);
+    PhysicsWorld physics;
+    physics.settings.boundsMin = Vec3{-50, 0, -50};
+    physics.settings.boundsMax = Vec3{50, 40, 50};
+    Quat before = scene.world.get<Transform>(ball).rotation;
+    for (int i = 0; i < 120; ++i) physics.step(scene, 1.0f / 120.0f, nullptr);
+    Quat after = scene.world.get<Transform>(ball).rotation;
+    auto qdot = [](const Quat& a, const Quat& b) { return a.x * b.x + a.y * b.y + a.z * b.z + a.w * b.w; };
+    // The physics world owns rotation now, so a body that was spun by a contact
+    // has to come back with a different orientation, still normalised.
+    CHECK(std::abs(qdot(before, after)) < 0.999f);
+    CHECK(std::abs(qdot(after, after) - 1.0f) < 1e-3f);
+}
