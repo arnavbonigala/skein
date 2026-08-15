@@ -31,7 +31,7 @@ Requires CMake 3.20, a C++20 compiler, Lua and (for the interactive demo) GLFW.
 brew install cmake lua glfw
 cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
 cmake --build build -j
-./build/skein_tests     # 96 tests
+./build/skein_tests     # 97 tests
 ./build/skein_bench     # headless CPU benchmark
 ./build/skein_bench --sweep   # plus the 25k to 1M scaling sweep
 ./build/skein_demo      # interactive window
@@ -151,6 +151,9 @@ spend a bounded fraction of their normal impulse against the pair's relative
 spin, which is what lets a rolling body come to rest and the pile sleep at all.
 A test drives a ball across the floor and checks it stops skidding, starts
 rolling, and eventually stops — without the motion ever running backwards.
+Friction is per collider and a pair rubs at the geometric mean of the two, so
+ice on rubber lands between ice on ice and rubber on rubber instead of at
+whichever coefficient was picked for the whole world.
 
 A turned box is met as the box it is. Box pairs separate along the least-overlap
 axis of a fifteen-axis separating-axis test, and the face that separates them is
@@ -526,7 +529,7 @@ objects drop out, `O` pauses, `P` dumps the frame profile, `V` toggles vsync,
 
 ## Tests
 
-96 tests, no framework. They cover the parts where being wrong is quiet: the
+97 tests, no framework. They cover the parts where being wrong is quiet: the
 hashed grid must return exactly the brute-force contact set even when collider
 sizes vary 70x, the coloured parallel solver must land bitwise on the serial
 result, a stack of eight spheres must still be standing after ten seconds, a
@@ -540,7 +543,8 @@ eight turned boxes must all still be standing after ten seconds, a slab must tum
 over end at least five times more readily than it spins about its own length,
 a skidding ball must end up rolling and then stop, clustered
 culling must keep exactly the objects the flat path keeps and
-must re-sort only once motion has actually loosened the order, a chain of joints must hang at its rest length rather than
+must re-sort only once motion has actually loosened the order, a slab must
+slide furthest on ice, least on rubber and in between on one of each, a chain of joints must hang at its rest length rather than
 stretch or climb and must still do so after being saved and loaded, a
 2,000-entity hierarchy with destroyed parents must survive a serialization
 round trip, threaded transform updates must match single-threaded ones bit for
