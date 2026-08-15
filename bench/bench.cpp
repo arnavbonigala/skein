@@ -452,6 +452,19 @@ int main(int argc, char** argv) {
         row(label, t.median, speedup(frameSerial.median, t.median));
     }
 
+    heading("job dispatch overhead");
+    {
+        // What a parallel pass costs before any of its work runs. Every phase
+        // of the frame pays this once, and the coloured solver pays it per
+        // colour per iteration, so it sets the floor on how small a pass can
+        // usefully be.
+        for (size_t chunks : {size_t{2}, size_t{8}, size_t{64}}) {
+            Timing t = measure(50, 400, [&] { jobs.parallelFor(chunks, 1, [](size_t, size_t) {}); });
+            row(format("empty pass, %2zu chunks", chunks).c_str(), t.median,
+                format("%.1f us median, %.1f us worst of 400", t.median * 1000.0, t.worst * 1000.0));
+        }
+    }
+
     heading("serialization");
     std::vector<uint8_t> blob;
     Timing saveTime = measure(1, 8, [&] { blob = serializeScene(demo.scene); });
