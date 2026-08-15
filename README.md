@@ -256,7 +256,8 @@ to 48 fps. Once batched the frame is GPU-bound, and culling removes another
 ## Demo controls
 
 `W A S D`, `Space`/`Ctrl` fly, `Shift` boosts, `Tab` releases the mouse.
-`F` toggles frustum culling, `I` instanced batching, `L` shadows, `B` draws
+`F` toggles frustum culling, `M` cluster culling (the title bar shows how many
+objects still needed their own test), `I` instanced batching, `L` shadows, `B` draws
 cull bounds, `C` freezes the culling camera so you can fly outside it and watch
 objects drop out, `O` pauses, `P` dumps the frame profile, `V` toggles vsync,
 `F5`/`F9` save and load `scene.skn`.

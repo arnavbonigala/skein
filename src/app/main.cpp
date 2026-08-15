@@ -67,6 +67,10 @@ void keyCallback(GLFWwindow* window, int key, int scancode, int action, int mods
             g.renderer->options.shadows = !g.renderer->options.shadows;
             std::printf("shadows %s\n", g.renderer->options.shadows ? "on" : "off");
             break;
+        case GLFW_KEY_M:
+            g.renderer->options.clusterCulling = !g.renderer->options.clusterCulling;
+            std::printf("cluster culling %s\n", g.renderer->options.clusterCulling ? "on" : "off");
+            break;
         case GLFW_KEY_B:
             g.showBounds = !g.showBounds;
             break;
@@ -327,11 +331,11 @@ int main(int argc, char** argv) {
             char title[512];
             std::snprintf(title, sizeof(title),
                           "skein | %.2f ms cpu (%.1f fps) | gpu %.2f ms | %u/%u visible | %u draws | "
-                          "%.1fM tris | %u bodies %u contacts | %.0f MB",
+                          "%.1fM tris | %u tested | %u bodies %u contacts | %.0f MB",
                           Profiler::instance().avgFrameMs(),
                           Profiler::instance().avgFrameMs() > 0 ? 1000.0 / Profiler::instance().avgFrameMs() : 0.0,
                           s.gpuMs, s.visible, s.candidates, s.drawCalls + s.shadowDrawCalls,
-                          static_cast<double>(s.triangles) * 1e-6, p.bodies, p.contacts,
+                          static_cast<double>(s.triangles) * 1e-6, s.objectsTested, p.bodies, p.contacts,
                           static_cast<double>(demo.bytesUsed() + s.gpuBytes) / (1024.0 * 1024.0));
             glfwSetWindowTitle(window, title);
         }

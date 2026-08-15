@@ -151,7 +151,9 @@ void Renderer::render(Scene& scene, const Assets& assets, const Mat4& view, cons
     Clock::time_point cullStart = Clock::now();
     // The Morton order decays as objects move; maintain() re-sorts only once
     // the clusters have loosened enough to stop paying for themselves.
-    if (options.frustumCulling && (frameIndex_++ % 30) == 0) culler_.maintain(scene);
+    culler_.useClusters = options.clusterCulling;
+    shadowCuller_.useClusters = options.clusterCulling;
+    if (options.frustumCulling && options.clusterCulling && (frameIndex_++ % 30) == 0) culler_.maintain(scene);
     culler_.build(scene, frustum, static_cast<uint32_t>(assets.materialCount()), mainList_, jobs,
                   options.frustumCulling);
 
@@ -164,6 +166,7 @@ void Renderer::render(Scene& scene, const Assets& assets, const Mat4& view, cons
         shadowList_.clear();
     }
     stats_.cullMs = millisSince(cullStart);
+    stats_.objectsTested = culler_.stats().objectsTested;
 
     const size_t mainCount = mainList_.instances.size();
     const size_t shadowCount = shadowList_.instances.size();

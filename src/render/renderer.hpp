@@ -15,6 +15,7 @@ class JobSystem;
 
 struct RenderOptions {
     bool frustumCulling = true;
+    bool clusterCulling = true;
     bool instancing = true;
     bool shadows = true;
     bool wireframeBounds = false;
@@ -33,6 +34,9 @@ struct RenderStats {
     uint32_t shadowDrawCalls = 0;
     uint64_t triangles = 0;
     uint32_t pointLights = 0;
+    /// Objects that needed their own frustum test rather than inheriting a
+    /// cluster's verdict.
+    uint32_t objectsTested = 0;
     double cullMs = 0;
     double submitMs = 0;
     double cpuMs = 0;
