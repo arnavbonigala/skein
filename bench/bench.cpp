@@ -316,7 +316,7 @@ int main(int argc, char** argv) {
         // needs as many iterations as the stack is tall. Reusing last frame's
         // impulse removes that dependency.
         const float radius = 0.5f;
-        auto column = [&](bool warm, int iters) {
+        auto column = [&](bool warm, int substeps, int iters) {
             Scene scene;
             PhysicsWorld world;
             world.settings.boundsMin = Vec3{-20, 0, -20};
@@ -325,9 +325,7 @@ int main(int argc, char** argv) {
             world.settings.allowSleep = false;
             world.settings.warmStart = warm;
             world.settings.solverIterations = iters;
-            // One substep, so an iteration count means iterations and nothing
-            // else; substepping gets its own comparison further down.
-            world.settings.solverSubsteps = 1;
+            world.settings.solverSubsteps = substeps;
             std::vector<Entity> tops;
             for (int c = 0; c < 32; ++c) {
                 float x = static_cast<float>(c % 8) * 3.0f - 12.0f;
@@ -346,20 +344,30 @@ int main(int argc, char** argv) {
             }
             for (int i = 0; i < 600; ++i) world.step(scene, 1.0f / 60.0f, &jobs);
             double height = 0;
-            for (Entity e : tops) height += scene.world.tryGet<Transform>(e)->position.y;
+            int intact = 0;
+            for (Entity e : tops) {
+                const float y = scene.world.tryGet<Transform>(e)->position.y;
+                height += y;
+                if (y > 7.0f) ++intact;
+            }
             Timing t = measure(2, 20, [&] { world.step(scene, 1.0f / 60.0f, &jobs); });
-            return std::make_pair(t.median, height / static_cast<double>(tops.size()));
+            return std::make_tuple(t.median, height / static_cast<double>(tops.size()), intact);
         };
         const double ideal = radius + 7.0 * 2.0 * radius;
-        for (int iters : {2, 4, 8, 16}) {
-            auto [coldMs, coldTop] = column(false, iters);
-            auto [warmMs, warmTop] = column(true, iters);
-            row(format("%2d iterations, cold", iters).c_str(), coldMs,
-                format("top sphere at %.2f of %.2f (%.0f%% of the stack standing)", coldTop, ideal,
-                       100.0 * (coldTop - radius) / (ideal - radius)));
-            row(format("%2d iterations, warm started", iters).c_str(), warmMs,
-                format("top sphere at %.2f of %.2f (%.0f%% standing)", warmTop, ideal,
-                       100.0 * (warmTop - radius) / (ideal - radius)));
+        auto report = [&](const char* label, std::tuple<double, double, int> r) {
+            auto [ms, top, intact] = r;
+            row(label, ms,
+                format("top sphere at %.2f of %.2f (%.0f%% standing), %d of 32 columns intact", top, ideal,
+                       100.0 * (top - radius) / (ideal - radius), intact));
+        };
+        // Swept over substeps rather than over iterations alone: at one substep
+        // a column of spheres comes down at every iteration count there is, so
+        // an iteration-only sweep measures a regime nothing runs in.
+        for (int substeps : {1, 2, 4}) {
+            report(format("%d substep%s x 2 iterations, cold        ", substeps, substeps == 1 ? " " : "s").c_str(),
+                   column(false, substeps, 2));
+            report(format("%d substep%s x 2 iterations, warm started", substeps, substeps == 1 ? " " : "s").c_str(),
+                   column(true, substeps, 2));
         }
     }
 

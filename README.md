@@ -237,16 +237,25 @@ that errors is unbound and reported instead of killing the frame.
 
 Apple M3, 8 hardware threads, macOS 26.6, Apple clang `-O2`, OpenGL 4.1 (Metal
 90.5). CPU figures are medians over 40 runs from `skein_bench`; render figures
-are means over 200 frames from `skein_demo --capture 200`. Every timed sample
-checks `ru_nivcsw` on either side of itself and is discarded if the scheduler
-preempted the thread mid-measurement, so a loaded machine costs coverage rather
-than accuracy; the run behind these tables kept 639 of 3,438 samples and the
-header prints the drop rate and the load average alongside them.
+are means over 200 frames from `skein_demo --capture 200`.
+
+Every timed sample checks `ru_nivcsw` on either side of itself and is discarded
+if the scheduler preempted the thread mid-measurement, so a loaded machine costs
+coverage rather than accuracy. That is not enough on its own: the machine behind
+these tables sat at a load average of 11.5, which kept only 796 of 3,606 samples
+and inflates every wall-clock figure below. So each headline row also reports
+**core-milliseconds** — the CPU time the process actually burned, summed over
+its threads. That number is the work rather than the wait, and it is stable
+where wall time is not: across two runs four minutes apart, one starting at load
+3.2 and one at 11.5, the serial physics step measured 102.9 and 100.5 core-ms —
+2% apart — while the *parallel* full frame, which has seven more threads
+competing for whatever cores are left, went from 76.9 ms to 36.0 ms. Treat the
+wall column as an upper bound and the core-ms column as the measurement.
 
 Both harnesses build the same world from `Demo::build`: **112,025 entities**,
 100,000 of them integrating position and rotation every frame, **37,000
-renderable**, 30,000 rigid bodies piled densely enough to generate ~60,000
-contacts a step, 25 lights, 6 meshes, 6 materials, 31.6 MB resident. The
+renderable**, 30,000 rigid bodies piled densely enough to generate ~105,000
+contacts a step, 25 lights, 6 meshes, 6 materials, 31.8 MB resident. The
 interactive demo also runs `assets/scripts/demo.lua` on top, which adds 316
 scripted entities — 112,341 entities and 37,316 renderables in the render
 table below.
@@ -255,42 +264,60 @@ table below.
 
 | Pass | 1 thread | 8 threads | Speedup |
 |---|---|---|---|
-| ECS iteration (100k integrate) | 0.679 ms — 6.8 ns/entity | 0.176 ms — 1.8 ns/entity | 3.86x |
-| Transform hierarchy (112k) | 0.756 ms — 6.8 ns/entity | 0.334 ms — 3.0 ns/entity | 2.26x |
-| Physics step (30k bodies, 60k contacts) | 17.13 ms — 571 ns/body | 6.23 ms — 208 ns/body | 2.75x |
-| Cull + batch (37k candidates) | 0.600 ms — 16.2 ns/object | 0.376 ms — 10.2 ns/object | 1.60x |
-| **Full simulation frame** | **19.60 ms (51 fps)** | **7.20 ms (139 fps)** | **2.72x** |
+| ECS iteration (100k integrate) | 0.81 ms — 0.82 core-ms | 0.20 ms — 1.35 core-ms | 4.09x |
+| Transform hierarchy (112k) | 0.77 ms — 0.78 core-ms | 0.35 ms — 2.11 core-ms | 2.21x |
+| Physics step (30k bodies, 105k contacts) | 99.8 ms — 100.5 core-ms | 37.0 ms — 204.5 core-ms | 2.70x |
+| Cull + batch (37k candidates) | 0.59 ms — 0.60 core-ms | 0.34 ms — 1.35 core-ms | 1.75x |
+| **Full simulation frame** | **89.7 ms — 90.6 core-ms** | **36.0 ms — 179.4 core-ms** | **2.49x** |
+
+The core-ms columns are what parallelism actually costs. The physics step does
+2.03x the work to run 2.70x faster; the transform hierarchy does 2.7x the work
+for 2.2x, because its levels are shallow enough that dispatch is a real fraction
+of the pass. A step that cost 17 ms in an earlier revision of this table now
+costs 100: the solver runs four substeps of two iterations rather than one pass
+of two, which is eight sweeps where there were two, and the scene settled into a
+denser pile than it used to. The cost buys a stack of turned boxes that stands rather than
+leans; [what the solver leaves behind](#what-the-solver-leaves-behind) prices
+every substep and iteration mix against how much of the stack survives.
 
 Thread scaling on the full simulation frame:
 
 | Threads | 1 | 2 | 3 | 4 | 6 | 8 |
 |---|---|---|---|---|---|---|
-| ms | 17.96 | 10.22 | 7.78 | 6.41 | 6.95 | 7.00 |
-| speedup | 1.09x | 1.92x | 2.52x | 3.06x | 2.82x | 2.80x |
+| ms | 88.05 | 48.62 | 36.79 | 32.01 | 33.34 | 32.73 |
+| speedup | 1.02x | 1.85x | 2.44x | 2.80x | 2.69x | 2.74x |
 
 Scaling flattens past four threads because the M3's four efficiency cores are
 roughly a third the throughput of its performance cores, and because the
-coloured solver has to finish each colour before starting the next.
+coloured solver has to finish each colour before starting the next — 44 colours
+across 8 sweeps is 352 barriers a step.
 
 Where the frame actually goes, from the built-in profiler at 8 threads:
 
-| Zone | avg | p95 |
-|---|---|---|
-| physics/solve | 2.79 ms | 3.07 ms |
-| physics/narrowphase | 1.77 ms | 2.01 ms |
-| physics/broadphase | 1.04 ms | 1.13 ms |
-| scene/updateTransforms | 0.69 ms | 0.83 ms |
-| physics/impulseCache | 0.36 ms | 0.49 ms |
-| render/cull | 0.30 ms | 0.39 ms |
-| physics/gather | 0.27 ms | 0.32 ms |
-| ecs/kinematics | 0.26 ms | 0.37 ms |
-| physics/impulseStore | 0.26 ms | 0.32 ms |
-| physics/color | 0.23 ms | 0.24 ms |
-| physics/scatter | 0.10 ms | 0.12 ms |
-| physics/integrate | 0.04 ms | 0.08 ms |
-| physics/sleep | 0.04 ms | 0.08 ms |
-| render/clusterBounds | 0.04 ms | 0.06 ms |
-| render/batchSort | 0.04 ms | 0.04 ms |
+| Zone | avg | p95 | calls/frame |
+|---|---|---|---|
+| physics/solve | 28.37 ms | 32.54 ms | 1 |
+| physics/narrowphase | 2.85 ms | 3.19 ms | 1 |
+| physics/prepare | 1.14 ms | 1.39 ms | 4 |
+| physics/broadphase | 1.04 ms | 1.18 ms | 1 |
+| physics/gather | 0.86 ms | 1.57 ms | 1 |
+| physics/impulseCache | 0.83 ms | 1.07 ms | 1 |
+| physics/integrate | 0.79 ms | 1.03 ms | 8 |
+| scene/updateTransforms | 0.69 ms | 0.82 ms | 1 |
+| physics/impulseStore | 0.53 ms | 0.69 ms | 1 |
+| physics/color | 0.40 ms | 0.42 ms | 1 |
+| render/cull | 0.30 ms | 0.41 ms | 1 |
+| ecs/kinematics | 0.25 ms | 0.36 ms | 1 |
+| physics/scatter | 0.13 ms | 0.17 ms | 1 |
+| physics/sleep | 0.06 ms | 0.08 ms | 1 |
+| render/batchSort | 0.04 ms | 0.04 ms | 1 |
+| render/clusterBounds | 0.03 ms | 0.06 ms | 1 |
+
+The solve is 84% of the step and everything else is rounding, which is what a
+solver that runs eight sweeps over 105,000 contacts should look like. `prepare`
+runs once a substep and `integrate` twice, and both are cheap enough that
+deriving contact geometry per substep rather than per iteration was still worth
+8.4% of the step when it was measured.
 
 ### Cluster culling over Morton-ordered pools
 
