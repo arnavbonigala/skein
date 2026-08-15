@@ -654,7 +654,10 @@ void PhysicsWorld::buildGrid(JobSystem* jobs) {
             // The grid is built where the bodies are now and the solve moves
             // them afterwards, so the narrowphase has to accept a pair that is
             // still apart by as much as the step will close.
-            motion_[i] = length(velocity_[i]) * stepDt_;
+            // Zero when speculation is off, or the narrowphase would still
+            // accept a pair across the gap the step is about to close and the
+            // test would only be discrete in the broadphase.
+            motion_[i] = settings.speculativeContacts ? length(velocity_[i]) * stepDt_ : 0.0f;
             const float r = reach_[i] + sweep;
             uint32_t span = 1;
             for (int axis = 0; axis < 3; ++axis) {
