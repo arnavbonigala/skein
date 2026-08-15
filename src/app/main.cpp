@@ -349,11 +349,11 @@ int main(int argc, char** argv) {
             char title[512];
             std::snprintf(title, sizeof(title),
                           "skein | %.2f ms cpu (%.1f fps) | gpu %.2f ms | %u/%u visible | %u draws | "
-                          "%.1fM tris | %u tested | %u/%u awake %u contacts | %.0f MB",
+                          "%.1fM tris | %u tested | %u/%u awake %u contacts x%u | %.0f MB",
                           Profiler::instance().avgFrameMs(),
                           Profiler::instance().avgFrameMs() > 0 ? 1000.0 / Profiler::instance().avgFrameMs() : 0.0,
                           s.gpuMs, s.visible, s.candidates, s.drawCalls + s.shadowDrawCalls,
-                          static_cast<double>(s.triangles) * 1e-6, s.objectsTested, p.awake, p.bodies, p.contacts,
+                          static_cast<double>(s.triangles) * 1e-6, s.objectsTested, p.awake, p.bodies, p.contacts, p.substeps,
                           static_cast<double>(demo.bytesUsed() + s.gpuBytes) / (1024.0 * 1024.0));
             glfwSetWindowTitle(window, title);
         }
