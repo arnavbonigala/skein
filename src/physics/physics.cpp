@@ -344,11 +344,11 @@ void PhysicsWorld::findContacts(JobSystem* jobs) {
                             continue;
                         Contact contact{i, j, Vec3{0, 1, 0}, 0};
                         if (!narrow(i, j, contact)) continue;
-                        // Only a body that is actually moving wakes a sleeper.
-                        // Waking on mere contact would let one jittering body
-                        // cascade through a settled pile and wake all of it.
-                        // A sleeper that something has been pushed into wakes
-                        // regardless: nothing else is left to separate them.
+                        // Only a body that is actually moving wakes a sleeper,
+                        // or one jittering body would cascade through a settled
+                        // pile and wake all of it. An overlap deep enough to
+                        // matter wakes it regardless: once both sides sleep,
+                        // nothing is left to push them apart.
                         const bool deep = contact.depth > kWakeDepth;
                         if (asleep_[i] && (deep || length2(velocity_[j]) > wakeSpeed2))
                             std::atomic_ref<uint8_t>(asleep_[i]).store(0, std::memory_order_relaxed);

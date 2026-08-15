@@ -104,6 +104,11 @@ sinks through itself and the depth push papers over the result. Reusing last
 frame's impulse converges the same column in two iterations that otherwise
 needed thirty-two, which in turn is what lets a pile go still enough to sleep.
 
+Bodies are linear only: spheres and axis-aligned boxes, no angular velocity and
+no rotated box collisions. Friction therefore acts as sliding friction on a
+sphere that never spins, which is why piles settle flatter than they would with
+rolling resistance in the loop.
+
 **Assets** — a hand-written OBJ parser (all four face index forms, negative
 indices, polygon fan triangulation, vertex welding, generated normals) plus
 generated primitives. Batch loads parse concurrently and register in a
