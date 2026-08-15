@@ -315,6 +315,7 @@ void PhysicsWorld::gather(Scene& scene) {
     sleepTimer_.resize(n);
     asleep_.resize(n);
     reach_.resize(n);
+    slot_.assign(n, UINT32_MAX);
 
     maxReach_ = 0.0f;
     minThin_ = 0.0f;
@@ -330,6 +331,7 @@ void PhysicsWorld::gather(Scene& scene) {
         const Velocity* v = velocities.tryGet(e);
         Vec3 linear = v ? v->linear : Vec3{0, 0, 0};
         float s = maxComponent(vabs(t->scale));
+        slot_[i] = static_cast<uint32_t>(m);
         entity_[m] = e;
         position_[m] = t->position;
         velocity_[m] = linear;
@@ -414,6 +416,119 @@ void PhysicsWorld::gather(Scene& scene) {
         reach_.resize(m);
     }
     meanReach_ = m == 0 ? 0.0f : static_cast<float>(reachSum / static_cast<double>(m));
+    gatherJoints(scene);
+}
+
+void PhysicsWorld::gatherJoints(Scene& scene) {
+    Pool<Joint>& joints = scene.world.pool<Joint>();
+    Pool<Collider>& colliders = scene.world.pool<Collider>();
+    const size_t previous = jointA_.size();
+    jointA_.clear();
+    jointB_.clear();
+    jointAnchorA_.clear();
+    jointAnchorB_.clear();
+    jointLength_.clear();
+    jointCompliance_.clear();
+    auto body = [&](Entity e) -> uint32_t {
+        if (!colliders.contains(e)) return UINT32_MAX;
+        uint32_t dense = colliders.sparse[entityIndex(e)];
+        return dense < slot_.size() ? slot_[dense] : UINT32_MAX;
+    };
+    for (size_t i = 0; i < joints.dense.size(); ++i) {
+        const Joint& j = joints.data[i];
+        uint32_t a = body(joints.dense[i]);
+        uint32_t b = body(j.other);
+        // A joint to a body that has been destroyed, or to itself, is not a
+        // constraint; dropping it beats holding a stale index into the arrays.
+        if (a == UINT32_MAX || b == UINT32_MAX || a == b) continue;
+        // A joint is a permanent tie, so one end waking has to wake the other:
+        // otherwise a chain half asleep is solved against a body that never
+        // integrates what the solve gave it.
+        if (asleep_[a] != asleep_[b]) {
+            asleep_[a] = 0;
+            asleep_[b] = 0;
+            sleepTimer_[a] = 0.0f;
+            sleepTimer_[b] = 0.0f;
+        }
+        jointA_.push_back(a);
+        jointB_.push_back(b);
+        jointAnchorA_.push_back(j.anchorA);
+        jointAnchorB_.push_back(j.anchorB);
+        jointLength_.push_back(j.length);
+        jointCompliance_.push_back(j.compliance);
+    }
+    if (jointA_.size() != previous)
+        jointImpulse_.assign(jointA_.size(), 0.0f);
+    else
+        jointImpulse_.resize(jointA_.size(), 0.0f);
+}
+
+void PhysicsWorld::solveJoints(float invDt, bool replay) {
+    // ponytail: solved serially rather than coloured in with the contacts. A
+    // scene has orders of magnitude fewer joints than contacts, and colouring
+    // them means one graph over both. Colour them together if a scene ever
+    // carries joints in the tens of thousands.
+    const bool angular = settings.angularContacts;
+    for (size_t k = 0; k < jointA_.size(); ++k) {
+        const uint32_t ia = jointA_[k], ib = jointB_[k];
+        const float imA = invMass_[ia], imB = invMass_[ib];
+        if (imA + imB <= 0.0f || (asleep_[ia] && asleep_[ib])) continue;
+        const Vec3 rA = angular ? rotate(orientation_[ia], jointAnchorA_[k]) : Vec3{0, 0, 0};
+        const Vec3 rB = angular ? rotate(orientation_[ib], jointAnchorB_[k]) : Vec3{0, 0, 0};
+        const Vec3 delta = (position_[ib] + rB) - (position_[ia] + rA);
+        const float distance = length(delta);
+        if (distance < 1e-6f) continue;
+        const Vec3 axis = delta / distance;
+        const float error = distance - jointLength_[k];
+
+        float mass = imA + imB;
+        if (angular) {
+            if (invInertia_[ia] > 0.0f) {
+                const Vec3 ca = cross(rA, axis);
+                mass += dot(ca, spin(ia, ca));
+            }
+            if (invInertia_[ib] > 0.0f) {
+                const Vec3 cb = cross(rB, axis);
+                mass += dot(cb, spin(ib, cb));
+            }
+        }
+        // Compliance enters as mass the constraint does not have, which is what
+        // makes a soft joint soft without a spring constant to tune against the
+        // step size: at zero it is the rigid constraint exactly.
+        const float softness = jointCompliance_[k] * invDt * invDt;
+        const Vec3 va = invInertia_[ia] > 0.0f ? velocity_[ia] + cross(angular_[ia], rA) : velocity_[ia];
+        const Vec3 vb = invInertia_[ib] > 0.0f ? velocity_[ib] + cross(angular_[ib], rB) : velocity_[ib];
+        const float vn = dot(vb - va, axis);
+        float& total = jointImpulse_[k];
+        // Replaying last step's impulse before anything else is solved is what
+        // lets a hanging chain start each step already holding its own weight,
+        // exactly as a resting stack does.
+        float lambda;
+        if (replay) {
+            lambda = total;
+            if (lambda == 0.0f) continue;
+        } else {
+            lambda = -(vn + softness * total) / (mass + softness);
+            total += lambda;
+        }
+        const Vec3 impulse = axis * lambda;
+        if (imA > 0.0f) velocity_[ia] -= impulse * imA;
+        if (imB > 0.0f) velocity_[ib] += impulse * imB;
+        if (angular && invInertia_[ia] > 0.0f) angular_[ia] -= spin(ia, cross(rA, impulse));
+        if (angular && invInertia_[ib] > 0.0f) angular_[ib] += spin(ib, cross(rB, impulse));
+        if (replay) continue;
+
+        // The length error is corrected through the same pseudo velocity the
+        // contacts use, not as a bias folded into the impulse above. Folded in,
+        // it is warm started along with everything else, and a chain replaying
+        // last step's correction on top of this step's rings itself apart
+        // within a few seconds.
+        const float target = std::clamp(-error * kCorrection * invDt, -kMaxSeparation, kMaxSeparation);
+        const float pvn = dot(pseudo_[ib] - pseudo_[ia], axis);
+        const Vec3 push = axis * ((target - pvn) / mass);
+        if (imA > 0.0f) pseudo_[ia] -= push * imA;
+        if (imB > 0.0f) pseudo_[ib] += push * imB;
+    }
 }
 
 void PhysicsWorld::buildInertia(JobSystem* jobs) {
@@ -1354,6 +1469,7 @@ void PhysicsWorld::resolve(float dt, JobSystem* jobs) {
         else
             warmStart(begin, end);
     }
+    if (settings.warmStart) solveJoints(invDt, true);
     // The positional push is collected across every substep and spent once, at
     // the end of the step. Applied and cleared per substep it is a quarter of
     // the push and a stack of spheres sinks through itself over a few hundred
@@ -1399,6 +1515,7 @@ void PhysicsWorld::resolve(float dt, JobSystem* jobs) {
                 solveRange(begin, end, positional, invDt);
         }
         solveRange(colorStart_[SERIAL_COLOR], colorStart_[SERIAL_COLOR + 1], positional, invDt);
+        solveJoints(invDt, false);
       }
       integratePositions(h, jobs);
     }
@@ -1718,15 +1835,18 @@ void PhysicsWorld::overlapSphere(const Vec3& center, float radius, std::vector<E
 
 size_t PhysicsWorld::bytesUsed() const {
     auto bytes = [](const auto& v) { return v.capacity() * sizeof(typename std::decay_t<decltype(v)>::value_type); };
-    size_t total = bytes(axis_) + bytes(rotated_) + bytes(entity_) + bytes(position_) + bytes(velocity_) + bytes(angular_) +
-                   bytes(orientation_) + bytes(invInertia_) + bytes(tangentImpulse_) + bytes(approach_) +
-                   bytes(sweep_) + bytes(pseudo_) + bytes(halfExtent_) +
-                   bytes(radius_) + bytes(invMass_) + bytes(restitution_) + bytes(kind_) + bytes(sleepTimer_) +
-                   bytes(asleep_) + bytes(deepest_) + bytes(reach_) + bytes(bodyLo_) + bytes(bodyHi_) +
-                   bytes(entryOffset_) + bytes(entryBucket_) + bytes(cellStart_) + bytes(entries_) +
-                   bytes(contacts_) + bytes(normalImpulse_) + bytes(restitutionBias_) + bytes(contactKey_) +
-                   bytes(cache_) + bytes(bodyColorMask_) + bytes(contactColor_) +
-                   bytes(colorStart_) + bytes(colorOrder_);
+    size_t total = bytes(angular_) + bytes(approach_) + bytes(armA_) + bytes(armB_) + bytes(asleep_) +
+                   bytes(axis_) + bytes(bodyColorMask_) + bytes(bodyHi_) + bytes(bodyLo_) + bytes(cache_) +
+                   bytes(cellStart_) + bytes(colorOrder_) + bytes(colorStart_) + bytes(contactColor_) +
+                   bytes(contactKey_) + bytes(contacts_) + bytes(deepest_) + bytes(entity_) + bytes(entries_) +
+                   bytes(entryBucket_) + bytes(entryOffset_) + bytes(halfExtent_) + bytes(invInertia_) +
+                   bytes(invInertiaLocal_) + bytes(invInertiaWorld_) + bytes(invMass_) + bytes(jointA_) +
+                   bytes(jointAnchorA_) + bytes(jointAnchorB_) + bytes(jointB_) + bytes(jointCompliance_) +
+                   bytes(jointImpulse_) + bytes(jointLength_) + bytes(kind_) + bytes(liveDepth_) + bytes(motion_) +
+                   bytes(normalImpulse_) + bytes(normalMass_) + bytes(orientation_) + bytes(position_) +
+                   bytes(pseudo_) + bytes(radius_) + bytes(reach_) + bytes(restitution_) +
+                   bytes(restitutionBias_) + bytes(rotated_) + bytes(sleepTimer_) + bytes(slot_) +
+                   bytes(spinDelta_) + bytes(sweep_) + bytes(tangentImpulse_) + bytes(velocity_);
     for (const auto& c : contactChunks_) total += bytes(c);
     return total;
 }
