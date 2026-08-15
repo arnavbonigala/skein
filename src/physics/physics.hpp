@@ -147,6 +147,8 @@ private:
     void solveBounds(size_t begin, size_t end, float invDt);
     float boundsReach(size_t i, int axis) const;
     void warmStart(uint32_t begin, uint32_t end);
+    void buildInertia(JobSystem* jobs);
+    Vec3 spin(size_t body, const Vec3& torque) const;
     void applyRestitution(uint32_t begin, uint32_t end);
     void loadCachedImpulses(JobSystem* jobs);
     void storeCachedImpulses(JobSystem* jobs);
@@ -172,6 +174,11 @@ private:
     /// How far each body has moved and turned since the contacts were found,
     /// which is what turns a fixed contact list into a live one.
     std::vector<Quat> spinDelta_;
+    /// Inverse inertia about the body's own axes, and the same tensor turned
+    /// into the world as six numbers of a symmetric matrix
+    /// (xx, yy, zz, xy, xz, yz).
+    std::vector<Vec3> invInertiaLocal_;
+    std::vector<float> invInertiaWorld_;
     std::vector<Vec3> halfExtent_;
     std::vector<float> radius_;
     std::vector<float> invMass_;

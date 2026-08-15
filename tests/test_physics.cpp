@@ -872,6 +872,30 @@ TEST(an_upright_box_rests_on_a_face_and_not_on_a_point) {
     CHECK(rotate(t.rotation, Vec3{0, 1, 0}).y > 0.99f);
 }
 
+TEST(a_slab_tumbles_end_over_end_harder_than_it_spins_about_its_length) {
+    // One number for inertia cannot say that: it makes a slab as reluctant to
+    // roll about its long axis as it is to tumble, and a plank hit at one end
+    // then behaves like a ball.
+    auto spinFrom = [](Vec3 from) {
+        Scene scene;
+        Entity slab = spawnBox(scene, Vec3{0, 0, 0}, Quat{}, Vec3{1.5f, 0.25f, 0.25f});
+        spawnSphere(scene, from, Vec3{0, -40, 0}, 0.1f);
+        PhysicsWorld physics;
+        physics.settings.gravity = Vec3{0, 0, 0};
+        physics.settings.useBounds = false;
+        physics.settings.linearDamping = 0.0f;
+        physics.settings.angularDamping = 0.0f;
+        for (int f = 0; f < 20; ++f) physics.step(scene, 1.0f / 60.0f, nullptr);
+        return length(scene.world.get<Velocity>(slab).angular);
+    };
+    // Same arm, same impulse, different axis: across the slab it turns about
+    // its length, along the slab it has to tumble.
+    const float easy = spinFrom(Vec3{0, 1.0f, 0.2f});
+    const float hard = spinFrom(Vec3{0.2f, 1.0f, 0});
+    CHECK(hard > 1e-3f);
+    CHECK(easy > 5.0f * hard);
+}
+
 TEST(a_ray_meets_a_turned_box_where_its_face_actually_is) {
     Scene scene;
     spawnBox(scene, Vec3{0, 0, 0}, Quat::axisAngle(Vec3{0, 1, 0}, PI * 0.25f), Vec3{1, 1, 1}, 0.0f);

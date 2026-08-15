@@ -304,6 +304,7 @@ void PhysicsWorld::gather(Scene& scene) {
     angular_.resize(n);
     orientation_.resize(n);
     invInertia_.resize(n);
+    invInertiaLocal_.resize(n);
     axis_.resize(n * 3);
     rotated_.resize(n);
     halfExtent_.resize(n);
@@ -360,10 +361,27 @@ void PhysicsWorld::gather(Scene& scene) {
         float reach = c.kind == static_cast<uint32_t>(ColliderKind::Sphere) ? c.radius * s
                                                                            : length(c.halfExtents * s);
         reach_[m] = reach;
-        // Inertia of a solid sphere of the collider's own reach, which is the
-        // one number that makes contact torque behave: too small and a graze
-        // spins the body up out of nothing, too large and nothing ever tumbles.
-        invInertia_[m] = c.invMass > 0.0f && reach > 0.0f ? c.invMass / (0.4f * reach * reach) : 0.0f;
+        // The real inertia of the shape, about its own axes. A slab is far
+        // easier to spin about its long axis than to tumble end over end, and a
+        // single number for both cannot say so: it either spins a body up out
+        // of a graze or refuses to let anything tumble.
+        Vec3 li{0, 0, 0};
+        if (c.invMass > 0.0f && reach > 0.0f) {
+            if (c.kind == static_cast<uint32_t>(ColliderKind::Sphere)) {
+                const float r = c.radius * s;
+                li = Vec3{1, 1, 1} * (c.invMass * 2.5f / (r * r));
+            } else {
+                const Vec3 h = c.halfExtents * s;
+                const Vec3 h2{h.x * h.x, h.y * h.y, h.z * h.z};
+                li = Vec3{3.0f * c.invMass / std::max(h2.y + h2.z, 1e-8f),
+                          3.0f * c.invMass / std::max(h2.x + h2.z, 1e-8f),
+                          3.0f * c.invMass / std::max(h2.x + h2.y, 1e-8f)};
+            }
+        }
+        invInertiaLocal_[m] = li;
+        // One scalar standing in for the tensor, for the places that only need
+        // to know how freely the body turns rather than about which axis.
+        invInertia_[m] = (li.x + li.y + li.z) * (1.0f / 3.0f);
         maxReach_ = std::max(maxReach_, reach);
         reachSum += reach;
         // Tunneling is bounded by the thinnest dimension in the world, not by
@@ -383,6 +401,7 @@ void PhysicsWorld::gather(Scene& scene) {
         angular_.resize(m);
         orientation_.resize(m);
         invInertia_.resize(m);
+        invInertiaLocal_.resize(m);
         axis_.resize(m * 3);
         rotated_.resize(m);
         halfExtent_.resize(m);
@@ -395,6 +414,39 @@ void PhysicsWorld::gather(Scene& scene) {
         reach_.resize(m);
     }
     meanReach_ = m == 0 ? 0.0f : static_cast<float>(reachSum / static_cast<double>(m));
+}
+
+void PhysicsWorld::buildInertia(JobSystem* jobs) {
+    const size_t n = position_.size();
+    invInertiaWorld_.resize(n * 6);
+    auto body = [&](size_t begin, size_t end) {
+        for (size_t i = begin; i < end; ++i) {
+            const Vec3 d = invInertiaLocal_[i];
+            // R D R^T, written out. The body's own axes are the columns of R,
+            // so each one is the direction its own inverse inertia acts along.
+            const Vec3 ax = rotate(orientation_[i], Vec3{1, 0, 0});
+            const Vec3 ay = rotate(orientation_[i], Vec3{0, 1, 0});
+            const Vec3 az = rotate(orientation_[i], Vec3{0, 0, 1});
+            float* w = &invInertiaWorld_[i * 6];
+            w[0] = d.x * ax.x * ax.x + d.y * ay.x * ay.x + d.z * az.x * az.x;
+            w[1] = d.x * ax.y * ax.y + d.y * ay.y * ay.y + d.z * az.y * az.y;
+            w[2] = d.x * ax.z * ax.z + d.y * ay.z * ay.z + d.z * az.z * az.z;
+            w[3] = d.x * ax.x * ax.y + d.y * ay.x * ay.y + d.z * az.x * az.y;
+            w[4] = d.x * ax.x * ax.z + d.y * ay.x * ay.z + d.z * az.x * az.z;
+            w[5] = d.x * ax.y * ax.z + d.y * ay.y * ay.z + d.z * az.y * az.z;
+        }
+    };
+    if (jobs && n >= 8192)
+        jobs->parallelFor(n, 4096, body);
+    else
+        body(0, n);
+}
+
+Vec3 PhysicsWorld::spin(size_t body, const Vec3& torque) const {
+    const float* w = &invInertiaWorld_[body * 6];
+    return Vec3{w[0] * torque.x + w[3] * torque.y + w[4] * torque.z,
+                w[3] * torque.x + w[1] * torque.y + w[5] * torque.z,
+                w[4] * torque.x + w[5] * torque.y + w[2] * torque.z};
 }
 
 void PhysicsWorld::integrateVelocities(float dt, JobSystem* jobs) {
@@ -765,7 +817,7 @@ void PhysicsWorld::findContacts(JobSystem* jobs) {
                         if (asleep_[i] && asleep_[j]) {
                             if (!audit) continue;
                             Contact probe[4];
-                            probe[0] = Contact{i, j, Vec3{0, 1, 0}, 0, 0, Vec3{0, 0, 0}};
+                            probe[0] = Contact{i, j, Vec3{0, 1, 0}, 0, 0, Vec3{0, 0, 0}, Vec3{0, 0, 0}, Vec3{0, 0, 0}};
                             if (narrowAll(i, j, probe, 0.0f) > 0 && probe[0].depth > kSleepDepth) {
                                 // The timer has to go back with the flag: this
                                 // pair contributes no contact this step, so
@@ -786,7 +838,7 @@ void PhysicsWorld::findContacts(JobSystem* jobs) {
                             continue;
                         }
                         Contact manifold[4];
-                        manifold[0] = Contact{i, j, Vec3{0, 1, 0}, 0, 0, Vec3{0, 0, 0}};
+                        manifold[0] = Contact{i, j, Vec3{0, 1, 0}, 0, 0, Vec3{0, 0, 0}, Vec3{0, 0, 0}, Vec3{0, 0, 0}};
                         int found = narrowAll(i, j, manifold, motion_[i] + motion_[j] + kManifoldSkin);
                         if (found == 0) continue;
                         const Contact& contact = manifold[0];
@@ -894,13 +946,14 @@ void PhysicsWorld::solveRange(uint32_t begin, uint32_t end, bool positional, flo
         // being rotated by an impulse there.
         auto effMass = [&](const Vec3& u) {
             Vec3 ca = cross(rA, u), cb = cross(rB, u);
-            return imSum + iiA * length2(ca) + iiB * length2(cb);
+            return imSum + (iiA > 0.0f ? dot(ca, spin(c.a, ca)) : 0.0f) +
+                   (iiB > 0.0f ? dot(cb, spin(c.b, cb)) : 0.0f);
         };
         auto applyImpulse = [&](const Vec3& j) {
             if (imA > 0.0f) velocity_[c.a] -= j * imA;
             if (imB > 0.0f) velocity_[c.b] += j * imB;
-            if (iiA > 0.0f) angular_[c.a] -= cross(rA, j) * iiA;
-            if (iiB > 0.0f) angular_[c.b] += cross(rB, j) * iiB;
+            if (iiA > 0.0f) angular_[c.a] -= spin(c.a, cross(rA, j));
+            if (iiB > 0.0f) angular_[c.b] += spin(c.b, cross(rB, j));
         };
         Vec3 rel = pointVel(c.b, rB, iiB) - pointVel(c.a, rA, iiA);
         float vn = dot(rel, c.normal);
@@ -998,8 +1051,8 @@ void PhysicsWorld::warmStart(uint32_t begin, uint32_t end) {
         if (invMass_[c.a] > 0.0f) velocity_[c.a] -= impulse * invMass_[c.a];
         if (invMass_[c.b] > 0.0f) velocity_[c.b] += impulse * invMass_[c.b];
         if (!settings.angularContacts) continue;
-        if (invInertia_[c.a] > 0.0f) angular_[c.a] -= cross(c.point - position_[c.a], impulse) * invInertia_[c.a];
-        if (invInertia_[c.b] > 0.0f) angular_[c.b] += cross(c.point - position_[c.b], impulse) * invInertia_[c.b];
+        if (invInertia_[c.a] > 0.0f) angular_[c.a] -= spin(c.a, cross(c.point - position_[c.a], impulse));
+        if (invInertia_[c.b] > 0.0f) angular_[c.b] += spin(c.b, cross(c.point - position_[c.b], impulse));
     }
 }
 
@@ -1162,7 +1215,7 @@ void PhysicsWorld::solveBounds(size_t begin, size_t end, float invDt) {
                 if (settings.angularContacts && invInertia_[i] > 0.0f) {
                     Vec3 arm{0, 0, 0};
                     arm[axis] = -sign * r;
-                    angular_[i] += cross(arm, stopped / invMass_[i]) * invInertia_[i];
+                    angular_[i] += spin(i, cross(arm, stopped / invMass_[i]));
                     // A ball rolling along the floor has a stationary contact
                     // point, so sliding friction never touches it again. The
                     // same budget spent against the spin is what brings it to
@@ -1204,7 +1257,8 @@ void PhysicsWorld::applyRestitution(uint32_t begin, uint32_t end) {
         float vn = dot(vb - va, c.normal);
         if (vn > restitutionBias_[k]) continue;
         Vec3 ca = cross(rA, c.normal), cb = cross(rB, c.normal);
-        float normalMass = imSum + iiA * length2(ca) + iiB * length2(cb);
+        float normalMass = imSum + (iiA > 0.0f ? dot(ca, spin(c.a, ca)) : 0.0f) +
+                           (iiB > 0.0f ? dot(cb, spin(c.b, cb)) : 0.0f);
         float lambda = -(vn - restitutionBias_[k]) / normalMass;
         float& total = normalImpulse_[k];
         float previous = total;
@@ -1214,8 +1268,8 @@ void PhysicsWorld::applyRestitution(uint32_t begin, uint32_t end) {
         const Vec3 j = c.normal * applied;
         if (imA > 0.0f) velocity_[c.a] -= j * imA;
         if (imB > 0.0f) velocity_[c.b] += j * imB;
-        if (iiA > 0.0f) angular_[c.a] -= cross(rA, j) * iiA;
-        if (iiB > 0.0f) angular_[c.b] += cross(rB, j) * iiB;
+        if (iiA > 0.0f) angular_[c.a] -= spin(c.a, cross(rA, j));
+        if (iiB > 0.0f) angular_[c.b] += spin(c.b, cross(rB, j));
     }
 }
 
@@ -1225,6 +1279,10 @@ void PhysicsWorld::resolve(float dt, JobSystem* jobs) {
     pseudoSpin_.assign(position_.size(), Vec3{0, 0, 0});
     deepest_.assign(position_.size(), 0.0f);
     spinDelta_.assign(position_.size(), Quat{});
+    // ponytail: built once per step rather than once per substep. A body turns
+    // by a fraction of a degree inside one step, and the tensor is only used
+    // for how hard it is to turn.
+    buildInertia(jobs);
     const int substeps = std::max(1, settings.solverSubsteps);
     const float h = dt / static_cast<float>(substeps);
     const float invDt = h > 1e-6f ? 1.0f / h : 0.0f;
