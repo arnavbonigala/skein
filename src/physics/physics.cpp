@@ -11,7 +11,7 @@
 namespace skein {
 namespace {
 
-constexpr size_t CONTACT_GRAIN = 512;
+constexpr size_t BUCKET_GRAIN = 2048;
 constexpr size_t SOLVE_GRAIN = 1024;
 /// Colours live in a 64-bit per-body mask; contacts that find no free colour
 /// land in this bucket and are solved on one thread at the end of each pass.
@@ -201,16 +201,28 @@ void PhysicsWorld::buildGrid(JobSystem* jobs) {
                     entries_[cursor[entryBucket_[k++]]++] = e;
                 }
     }
+    // Entries land grouped by hash bucket; sorting each bucket by the exact
+    // cell key turns every bucket into contiguous runs of one cell, which is
+    // what lets the scan walk cells directly instead of hashing per body.
+    auto sortBuckets = [&](size_t begin, size_t end) {
+        for (size_t b = begin; b < end; ++b) {
+            uint32_t from = cellStart_[b], to = cellStart_[b + 1];
+            if (to - from > 1)
+                std::sort(entries_.begin() + from, entries_.begin() + to,
+                          [](const GridEntry& a, const GridEntry& b) { return a.cell < b.cell; });
+        }
+    };
+    if (jobs && buckets >= 8192)
+        jobs->parallelFor(buckets, 4096, sortBuckets);
+    else
+        sortBuckets(0, buckets);
+
     stats_.gridCells = used;
     stats_.gridEntries = entries;
 }
 
 void PhysicsWorld::findContacts(JobSystem* jobs) {
     SKEIN_PROFILE("physics/narrowphase");
-    size_t n = position_.size();
-    size_t chunks = n == 0 ? 0 : (n + CONTACT_GRAIN - 1) / CONTACT_GRAIN;
-    contactChunks_.resize(chunks);
-    for (auto& c : contactChunks_) c.clear();
     std::atomic<uint64_t> pairs{0};
 
     auto narrow = [&](size_t i, size_t j, Contact& out) -> bool {
@@ -272,42 +284,47 @@ void PhysicsWorld::findContacts(JobSystem* jobs) {
     // Bodies are registered in every cell they overlap, so an overlapping pair
     // is guaranteed to meet in at least one shared cell. Reporting only from
     // the lowest shared cell keeps each pair unique without a visited set.
+    const uint32_t buckets = bucketMask_ + 1;
+    const size_t chunks = buckets == 0 ? 0 : (buckets + BUCKET_GRAIN - 1) / BUCKET_GRAIN;
+    contactChunks_.resize(chunks);
+    for (auto& c : contactChunks_) c.clear();
+
     auto scan = [&](size_t begin, size_t end) {
-        std::vector<Contact>& sink = contactChunks_[begin / CONTACT_GRAIN];
+        std::vector<Contact>& sink = contactChunks_[begin / BUCKET_GRAIN];
         uint64_t localPairs = 0;
-        for (size_t i = begin; i < end; ++i) {
-            const int32_t iLo[3] = {bodyLo_[i * 3], bodyLo_[i * 3 + 1], bodyLo_[i * 3 + 2]};
-            const int32_t iHi[3] = {bodyHi_[i * 3], bodyHi_[i * 3 + 1], bodyHi_[i * 3 + 2]};
-            const float reach = reach_[i];
-            const Vec3 pi = position_[i];
-            for (int32_t z = iLo[2]; z <= iHi[2]; ++z)
-                for (int32_t y = iLo[1]; y <= iHi[1]; ++y)
-                    for (int32_t x = iLo[0]; x <= iHi[0]; ++x) {
-                        const uint64_t key = packCell(x, y, z);
-                        uint32_t bucket = hashCell(x, y, z) & bucketMask_;
-                        for (uint32_t k = cellStart_[bucket]; k < cellStart_[bucket + 1]; ++k) {
-                            const GridEntry& e = entries_[k];
-                            if (e.body <= i || e.cell != key) continue;
-                            float dx = e.x - pi.x, dy = e.y - pi.y, dz = e.z - pi.z;
-                            float cull = reach + e.reach;
-                            ++localPairs;
-                            if (dx * dx + dy * dy + dz * dz > cull * cull) continue;
-                            uint32_t j = e.body;
-                            if (x != std::max(iLo[0], bodyLo_[j * 3]) || y != std::max(iLo[1], bodyLo_[j * 3 + 1]) ||
-                                z != std::max(iLo[2], bodyLo_[j * 3 + 2]))
-                                continue;
-                            Contact c{static_cast<uint32_t>(i), j, Vec3{0, 1, 0}, 0};
-                            if (narrow(i, j, c)) sink.push_back(c);
-                        }
+        for (size_t b = begin; b < end; ++b) {
+            const uint32_t from = cellStart_[b], to = cellStart_[b + 1];
+            for (uint32_t runStart = from; runStart < to;) {
+                const uint64_t key = entries_[runStart].cell;
+                uint32_t runEnd = runStart + 1;
+                while (runEnd < to && entries_[runEnd].cell == key) ++runEnd;
+                for (uint32_t a = runStart; a + 1 < runEnd; ++a) {
+                    const GridEntry& ea = entries_[a];
+                    for (uint32_t c = a + 1; c < runEnd; ++c) {
+                        const GridEntry& eb = entries_[c];
+                        float dx = eb.x - ea.x, dy = eb.y - ea.y, dz = eb.z - ea.z;
+                        float cull = ea.reach + eb.reach;
+                        ++localPairs;
+                        if (dx * dx + dy * dy + dz * dz > cull * cull) continue;
+                        const uint32_t i = std::min(ea.body, eb.body), j = std::max(ea.body, eb.body);
+                        if (key != packCell(std::max(bodyLo_[i * 3], bodyLo_[j * 3]),
+                                            std::max(bodyLo_[i * 3 + 1], bodyLo_[j * 3 + 1]),
+                                            std::max(bodyLo_[i * 3 + 2], bodyLo_[j * 3 + 2])))
+                            continue;
+                        Contact contact{i, j, Vec3{0, 1, 0}, 0};
+                        if (narrow(i, j, contact)) sink.push_back(contact);
                     }
+                }
+                runStart = runEnd;
+            }
         }
         pairs.fetch_add(localPairs, std::memory_order_relaxed);
     };
 
-    if (jobs && n >= CONTACT_GRAIN * 2)
-        jobs->parallelFor(n, CONTACT_GRAIN, scan);
-    else if (n > 0)
-        scan(0, n);
+    if (jobs && buckets >= BUCKET_GRAIN * 2)
+        jobs->parallelFor(buckets, BUCKET_GRAIN, scan);
+    else if (buckets > 0)
+        scan(0, buckets);
 
     contacts_.clear();
     for (auto& c : contactChunks_) contacts_.insert(contacts_.end(), c.begin(), c.end());
