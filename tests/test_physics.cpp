@@ -572,3 +572,51 @@ TEST(raycast_respects_max_distance_and_box_faces) {
     CHECK(!physics.raycast(Vec3{0, 0, 0}, Vec3{0, 0, 1}, 8.0f).hit);
     CHECK(!physics.raycast(Vec3{0, 0, 0}, Vec3{0, 1, 0}, 100.0f).hit);
 }
+
+TEST(a_long_soak_stays_finite_and_stops_allocating) {
+    std::mt19937 rng(2024);
+    std::uniform_real_distribution<float> p(-12.0f, 12.0f);
+    std::uniform_real_distribution<float> h(6.0f, 30.0f);
+
+    Scene scene;
+    for (int i = 0; i < 1200; ++i) {
+        if (i % 3 == 0) {
+            Transform t;
+            t.position = Vec3{p(rng), h(rng), p(rng)};
+            Entity e = scene.create(t);
+            scene.world.add<Velocity>(e, Velocity{Vec3{p(rng) * 0.2f, 0, p(rng) * 0.2f}, Vec3{0, 0, 0}});
+            Collider c;
+            c.kind = static_cast<uint32_t>(ColliderKind::Box);
+            c.halfExtents = Vec3{0.4f, 0.4f, 0.4f};
+            c.invMass = 1.0f;
+            scene.world.add<Collider>(e, c);
+        } else {
+            spawnSphere(scene, Vec3{p(rng), h(rng), p(rng)}, Vec3{p(rng) * 0.2f, 0, p(rng) * 0.2f}, 0.45f);
+        }
+    }
+
+    JobSystem jobs(4);
+    PhysicsWorld physics;
+    physics.settings.boundsMin = Vec3{-15, 0, -15};
+    physics.settings.boundsMax = Vec3{15, 40, 15};
+
+    for (int i = 0; i < 200; ++i) physics.step(scene, 1.0f / 60.0f, &jobs);
+    // Every per-frame buffer is reused rather than rebuilt, so a scene whose
+    // body count never changes must stop growing its working set.
+    const size_t settled = physics.bytesUsed();
+    for (int i = 0; i < 1300; ++i) physics.step(scene, 1.0f / 60.0f, &jobs);
+    CHECK(physics.bytesUsed() <= settled);
+
+    double fastest = 0;
+    forEach<Velocity>(scene.world, [&](Entity, Velocity& v) {
+        CHECK(std::isfinite(v.linear.x) && std::isfinite(v.linear.y) && std::isfinite(v.linear.z));
+        fastest = std::max<double>(fastest, length(v.linear));
+    });
+    forEach<Transform>(scene.world, [&](Entity, Transform& t) {
+        CHECK(std::isfinite(t.position.y));
+        CHECK(t.position.y >= -0.01f && t.position.y <= 40.01f);
+    });
+    // A settled pile that is still moving faster than it was dropped means the
+    // solver is feeding it energy.
+    CHECK(fastest < 5.0);
+}
