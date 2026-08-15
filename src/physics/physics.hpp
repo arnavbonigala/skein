@@ -129,6 +129,7 @@ private:
     std::vector<std::vector<Contact>> contactChunks_;
     std::vector<Contact> contacts_;
     std::vector<float> normalImpulse_;
+    std::vector<Vec3> tangentImpulse_;
     std::vector<float> deepest_;
     std::vector<float> restitutionBias_;
     std::vector<uint64_t> contactKey_;
@@ -137,6 +138,7 @@ private:
         uint64_t key = 0;
         float impulse = 0.0f;
         float pad = 0.0f;
+        Vec3 tangent{0, 0, 0};
     };
     std::vector<CacheSlot> cache_;
     uint32_t cacheMask_ = 0;

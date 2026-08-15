@@ -537,17 +537,21 @@ void PhysicsWorld::solveRange(uint32_t begin, uint32_t end, bool positional, flo
         // Coulomb friction along the contact tangent, bounded by the normal
         // impulse holding the pair together. Without it a pile of frictionless
         // spheres slides forever and never settles.
-        if (total > 0.0f) {
+        // Friction accumulates like the normal impulse does, as a vector in the
+        // contact plane clamped against the normal impulse holding the pair
+        // together. Recomputing it from scratch each iteration cannot hold a
+        // slope: the correction it applied last iteration is invisible to it.
+        {
             rel = velocity_[c.b] - velocity_[c.a];
-            Vec3 tangent = rel - c.normal * dot(rel, c.normal);
-            float tl = length(tangent);
-            if (tl > 1e-5f) {
-                tangent *= 1.0f / tl;
-                float jt = std::min(tl / imSum, friction * total);
-                Vec3 tImpulse = tangent * jt;
-                if (imA > 0.0f) velocity_[c.a] += tImpulse * imA;
-                if (imB > 0.0f) velocity_[c.b] -= tImpulse * imB;
-            }
+            Vec3 slide = rel - c.normal * dot(rel, c.normal);
+            Vec3 want = tangentImpulse_[k] - slide / imSum;
+            float limit = friction * total;
+            float wl = length(want);
+            if (wl > limit) want = wl > 1e-12f ? want * (limit / wl) : Vec3{0, 0, 0};
+            Vec3 applyT = want - tangentImpulse_[k];
+            tangentImpulse_[k] = want;
+            if (imA > 0.0f) velocity_[c.a] -= applyT * imA;
+            if (imB > 0.0f) velocity_[c.b] += applyT * imB;
         }
 
         if (positional) {
@@ -575,7 +579,7 @@ void PhysicsWorld::warmStart(uint32_t begin, uint32_t end) {
         const Contact& c = contacts_[k];
         float p = normalImpulse_[k];
         if (p == 0.0f) continue;
-        Vec3 impulse = c.normal * p;
+        Vec3 impulse = c.normal * p + tangentImpulse_[k];
         if (invMass_[c.a] > 0.0f) velocity_[c.a] -= impulse * invMass_[c.a];
         if (invMass_[c.b] > 0.0f) velocity_[c.b] += impulse * invMass_[c.b];
     }
@@ -586,22 +590,30 @@ void PhysicsWorld::loadCachedImpulses(JobSystem* jobs) {
     const size_t n = contacts_.size();
     contactKey_.resize(n);
     normalImpulse_.resize(n);
+    tangentImpulse_.resize(n);
     restitutionBias_.resize(n);
     auto body = [&](size_t begin, size_t end) {
         for (size_t i = begin; i < end; ++i) {
             uint64_t key = contactKey(entity_[contacts_[i].a], entity_[contacts_[i].b]);
             contactKey_[i] = key;
             float found = 0.0f;
+            Vec3 foundTangent{0, 0, 0};
             if (settings.warmStart && cacheMask_ != 0) {
                 for (uint32_t slot = static_cast<uint32_t>(key) & cacheMask_;; slot = (slot + 1) & cacheMask_) {
                     if (cache_[slot].key == 0) break;
                     if (cache_[slot].key == key) {
                         found = cache_[slot].impulse;
+                        foundTangent = cache_[slot].tangent;
                         break;
                     }
                 }
             }
             normalImpulse_[i] = found;
+            // The plane the impulse was accumulated in is not exactly the plane
+            // it will be replayed in, so the tangent part is projected back
+            // onto the current one before it is reused.
+            Vec3 t = foundTangent - contacts_[i].normal * dot(foundTangent, contacts_[i].normal);
+            tangentImpulse_[i] = t;
             // Resting contacts must not bounce, so restitution only enters
             // above a speed where a collision is what is actually happening.
             float vn = dot(velocity_[contacts_[i].b] - velocity_[contacts_[i].a], contacts_[i].normal);
@@ -636,6 +648,7 @@ void PhysicsWorld::storeCachedImpulses(JobSystem* jobs) {
                 if (cell.load(std::memory_order_relaxed) == key ||
                     cell.compare_exchange_strong(empty, key, std::memory_order_relaxed)) {
                     cache_[slot].impulse = normalImpulse_[i];
+                    cache_[slot].tangent = tangentImpulse_[i];
                     break;
                 }
             }
