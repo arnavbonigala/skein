@@ -5,6 +5,7 @@
 #include <random>
 
 #include "core/jobs.hpp"
+#include "physics/physics.hpp"
 #include "render/render_list.hpp"
 #include "scene/serialize.hpp"
 
@@ -248,6 +249,49 @@ TEST(scene_survives_a_serialization_round_trip) {
         CHECK_EQ(original.parentOf(e), restored.parentOf(e));
         checkMatrixNear(original.worldMatrix(e), restored.worldMatrix(e), 1e-4);
     });
+}
+
+TEST(empty_and_single_entity_scenes_survive_every_system) {
+    Scene scene;
+    JobSystem jobs(3);
+    PhysicsWorld physics;
+    CullSystem culler;
+    RenderList list;
+    Frustum f = extractFrustum(perspective(radians(60.0f), 1.6f, 0.1f, 100.0f) *
+                               lookAt(Vec3{0, 2, 8}, Vec3{0, 0, 0}, Vec3{0, 1, 0}));
+
+    scene.updateTransforms(&jobs);
+    physics.step(scene, 1.0f / 60.0f, &jobs);
+    culler.sortSpatially(scene);
+    culler.maintain(scene);
+    culler.build(scene, f, 4, list, &jobs);
+    CHECK_EQ(list.visible, uint32_t{0});
+    CHECK_EQ(list.drawCalls(), uint32_t{0});
+
+    std::vector<uint8_t> blob = serializeScene(scene);
+    Scene restored;
+    std::string error;
+    CHECK(deserializeScene(restored, blob.data(), blob.size(), error));
+    CHECK_EQ(restored.world.aliveCount(), size_t{0});
+
+    Entity only = scene.create(trs(Vec3{0, 0, 0}));
+    scene.world.add<Renderable>(only, Renderable{0, 0, 1, 0});
+    CullBounds cb;
+    cb.localExtent = Vec3{1, 1, 1};
+    scene.world.add<CullBounds>(only, cb);
+    Collider c;
+    c.radius = 1.0f;
+    c.invMass = 1.0f;
+    scene.world.add<Collider>(only, c);
+
+    scene.updateTransforms(&jobs);
+    physics.step(scene, 1.0f / 60.0f, &jobs);
+    culler.sortSpatially(scene);
+    culler.maintain(scene);
+    culler.build(scene, f, 4, list, &jobs);
+    CHECK_EQ(list.visible, uint32_t{1});
+    CHECK_EQ(list.drawCalls(), uint32_t{1});
+    CHECK(scene.world.tryGet<Transform>(only) != nullptr);
 }
 
 TEST(a_morton_sorted_scene_round_trips_with_every_component_still_paired) {
