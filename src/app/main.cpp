@@ -108,6 +108,18 @@ void keyCallback(GLFWwindow* window, int key, int scancode, int action, int mods
     }
 }
 
+struct CaptureConfig {
+    const char* label;
+    bool culling;
+    bool instancing;
+};
+
+/// One measured configuration of the render path, averaged over the sampled frames.
+struct CaptureResult {
+    double frameMs = 0, cpuMs = 0, gpuMs = 0, cullMs = 0, submitMs = 0;
+    double drawCalls = 0, visible = 0, candidates = 0, triangles = 0;
+};
+
 void cursorCallback(GLFWwindow*, double x, double y) {
     if (!g.mouseCaptured) return;
     if (g.firstMouse) {
@@ -139,6 +151,7 @@ void handleMovement(GLFWwindow* window, float dt) {
 
 int main(int argc, char** argv) {
     DemoConfig config;
+    int captureFrames = 0;
     std::string scriptPath = std::string(SKEIN_ASSET_DIR) + "/scripts/demo.lua";
     for (int i = 1; i < argc; ++i) {
         if (std::strcmp(argv[i], "--entities") == 0 && i + 1 < argc)
@@ -151,6 +164,8 @@ int main(int argc, char** argv) {
             config.runScripts = false;
         else if (std::strcmp(argv[i], "--script") == 0 && i + 1 < argc)
             scriptPath = argv[++i];
+        else if (std::strcmp(argv[i], "--capture") == 0 && i + 1 < argc)
+            captureFrames = std::atoi(argv[++i]);
     }
 
     if (!glfwInit()) {
@@ -204,6 +219,62 @@ int main(int argc, char** argv) {
 
     std::printf("built %zu entities in %.1f ms across %d threads\n", demo.scene.world.aliveCount(), buildMs,
                 jobs.threadCount());
+
+    if (captureFrames > 0) {
+        glfwSwapInterval(0);
+        glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_NORMAL);
+        const CaptureConfig configs[] = {
+            {"instanced + culled", true, true},
+            {"instanced, no culling", false, true},
+            {"one draw per object, culled", true, false},
+            {"one draw per object, no culling", false, false},
+        };
+        const int warmup = 20;
+        std::vector<CaptureResult> results;
+
+        for (const CaptureConfig& c : configs) {
+            renderer.options.frustumCulling = c.culling;
+            renderer.options.instancing = c.instancing;
+            CaptureResult r;
+            int sampled = 0;
+            for (int frame = 0; frame < captureFrames + warmup && !glfwWindowShouldClose(window); ++frame) {
+                Clock::time_point frameStart = Clock::now();
+                glfwPollEvents();
+                demo.update(1.0f / 60.0f, &jobs);
+                int width = 0, height = 0;
+                glfwGetFramebufferSize(window, &width, &height);
+                renderer.resize(width, height);
+                renderer.render(demo.scene, demo.assets, g.camera.view(),
+                                g.camera.projection(static_cast<float>(width) / static_cast<float>(height)),
+                                g.camera.position, &jobs);
+                glfwSwapBuffers(window);
+                if (frame < warmup) continue;
+                const RenderStats& s = renderer.stats();
+                r.frameMs += millisSince(frameStart);
+                r.cpuMs += s.cpuMs;
+                r.gpuMs += s.gpuMs;
+                r.cullMs += s.cullMs;
+                r.submitMs += s.submitMs;
+                r.drawCalls += s.drawCalls + s.shadowDrawCalls;
+                r.visible += s.visible;
+                r.candidates += s.candidates;
+                r.triangles += static_cast<double>(s.triangles);
+                ++sampled;
+            }
+            double n = sampled > 0 ? sampled : 1;
+            r.frameMs /= n; r.cpuMs /= n; r.gpuMs /= n; r.cullMs /= n; r.submitMs /= n;
+            r.drawCalls /= n; r.visible /= n; r.candidates /= n; r.triangles /= n;
+            results.push_back(r);
+            std::printf("%-32s frame %6.2f ms (%5.1f fps)  render cpu %6.2f  gpu %6.2f  cull %5.2f  submit %6.2f  "
+                        "%7.0f draws  %6.0f/%6.0f visible  %.2fM tris\n",
+                        c.label, r.frameMs, 1000.0 / r.frameMs, r.cpuMs, r.gpuMs, r.cullMs, r.submitMs, r.drawCalls,
+                        r.visible, r.candidates, r.triangles * 1e-6);
+        }
+        glfwDestroyWindow(window);
+        glfwTerminate();
+        return 0;
+    }
+
     printHelp();
 
     double lastTime = glfwGetTime();
