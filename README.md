@@ -115,6 +115,11 @@ widened in the broadphase by the part of its motion its own extent does not
 already cover, and a contact found across the remaining gap carries a negative
 depth that the solver treats as a bound on approach instead of an overlap to
 push out — so the body lands on the surface rather than inside it or past it.
+Restitution is carried across that gap rather than measured inside it: the
+constraint stops the body at the surface before a bounce could be sized from
+its velocity, so the fastest approach seen while the pair was apart is cached
+next to the impulse and spent on the frame they meet — an 80 m/s ball at
+restitution 0.8 rebounds above 40 m/s instead of barely leaving the floor.
 See [Fast bodies against a thin wall](#fast-bodies-against-a-thin-wall). The
 step still splits itself, capped by `maxSubsteps` (4 by default, 1 to disable),
 but only for motion past a whole grid cell in one step, where widening one body
