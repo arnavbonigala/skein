@@ -293,6 +293,27 @@ TEST(a_stack_holds_its_height_at_the_default_iteration_count) {
     CHECK(top > radius + 7.0f * (2.0f * radius - 0.08f));
 }
 
+TEST(a_script_that_throws_a_sleeping_body_wakes_it) {
+    // demo.lua recycles fallen bodies by teleporting them and setting a
+    // velocity. A sleeper that ignored that would hang in mid air.
+    Scene scene;
+    PhysicsWorld world;
+    world.settings.boundsMin = Vec3{-6, 0, -6};
+    world.settings.boundsMax = Vec3{6, 80, 6};
+    world.settings.restitutionFloor = 0.0f;
+    Entity e = spawnSphere(scene, Vec3{0, 2.0f, 0}, Vec3{0, 0, 0}, 0.5f);
+    scene.world.tryGet<Collider>(e)->restitution = 0.0f;
+
+    for (int i = 0; i < 300; ++i) world.step(scene, 1.0f / 60.0f);
+    CHECK_EQ(world.stats().awake, 0u);
+
+    scene.world.tryGet<Transform>(e)->position = Vec3{0, 70.0f, 0};
+    scene.world.tryGet<Velocity>(e)->linear = Vec3{0, -2.0f, 0};
+    for (int i = 0; i < 60; ++i) world.step(scene, 1.0f / 60.0f);
+
+    CHECK(scene.world.tryGet<Transform>(e)->position.y < 65.0f);
+}
+
 TEST(a_settled_pile_falls_asleep_and_a_moving_body_wakes_it) {
     Scene scene;
     PhysicsWorld world;

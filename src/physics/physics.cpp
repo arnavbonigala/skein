@@ -117,7 +117,13 @@ void PhysicsWorld::gather(Scene& scene) {
         restitution_.push_back(c.restitution);
         kind_.push_back(c.kind);
         sleepTimer_.push_back(c.sleepTimer);
-        asleep_.push_back(settings.allowSleep ? static_cast<uint8_t>(c.asleep) : uint8_t{0});
+        // Anything outside physics that gives a sleeper velocity — a script, the
+        // editor, a loaded scene — has to wake it, or it hangs wherever it was
+        // put. ponytail: a teleport that leaves velocity alone still will not
+        // wake it; store the last scattered position if that ever comes up.
+        bool asleep = settings.allowSleep && c.asleep != 0;
+        if (asleep && length2(velocity_.back()) > settings.sleepSpeed * settings.sleepSpeed) asleep = false;
+        asleep_.push_back(asleep ? uint8_t{1} : uint8_t{0});
         float reach = c.kind == static_cast<uint32_t>(ColliderKind::Sphere) ? c.radius * s
                                                                            : length(c.halfExtents * s);
         reach_.push_back(reach);
