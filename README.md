@@ -286,6 +286,22 @@ iteration. Reusing each contact's accumulated impulse removes that dependency
 on stack height, and it is what makes sleeping possible at all: a pile that
 never converges never goes still enough to sleep.
 
+### Sleeping
+
+A body that has been slow for 0.6 s stops integrating, stops solving and stops
+being scanned; a cell where every entry is asleep is skipped whole. It wakes
+when something moving faster than the sleep threshold touches it, or when
+anything is pushed into it deeper than 5 cm. Timed single threaded, because the
+saving is work, not parallelism:
+
+| Scene | Sleeping off | Sleeping on | |
+|---|---|---|---|
+| 4,000 in a box, 30 s to settle | 1.59 ms — 4,000 awake, 12,082 contacts | **0.35 ms** — 152 awake, 714 contacts | **4.55x** |
+| 30,000 demo field, still churning | 16.89 ms — 30,000 awake | 16.67 ms — 27,285 awake | 1.01x |
+
+The second row is the point of the first: a pile that never settles pays
+nothing for the feature it cannot use.
+
 ### Culling and broadphase effectiveness
 
 37,000 candidates against a 65° frustum: **25,230 kept, 11,770 rejected
