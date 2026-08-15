@@ -118,8 +118,13 @@ private:
     std::vector<float> deepest_;
     std::vector<float> restitutionBias_;
     std::vector<uint64_t> contactKey_;
-    std::vector<uint64_t> cacheKey_;
-    std::vector<float> cacheImpulse_;
+    /// Key and impulse share a cache line, since a probe reads both.
+    struct CacheSlot {
+        uint64_t key = 0;
+        float impulse = 0.0f;
+        float pad = 0.0f;
+    };
+    std::vector<CacheSlot> cache_;
     uint32_t cacheMask_ = 0;
     std::vector<uint64_t> bodyColorMask_;
     std::vector<uint32_t> contactColor_;

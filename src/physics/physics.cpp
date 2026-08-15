@@ -500,9 +500,9 @@ void PhysicsWorld::loadCachedImpulses(JobSystem* jobs) {
             float found = 0.0f;
             if (settings.warmStart && cacheMask_ != 0) {
                 for (uint32_t slot = static_cast<uint32_t>(key) & cacheMask_;; slot = (slot + 1) & cacheMask_) {
-                    if (cacheKey_[slot] == 0) break;
-                    if (cacheKey_[slot] == key) {
-                        found = cacheImpulse_[slot];
+                    if (cache_[slot].key == 0) break;
+                    if (cache_[slot].key == key) {
+                        found = cache_[slot].impulse;
                         break;
                     }
                 }
@@ -526,15 +526,14 @@ void PhysicsWorld::storeCachedImpulses() {
     const size_t n = contacts_.size();
     uint32_t slots = std::max(nextPow2(static_cast<uint32_t>(n) * 2 + 1), 64u);
     cacheMask_ = slots - 1;
-    cacheKey_.assign(slots, 0);
-    cacheImpulse_.assign(slots, 0.0f);
+    cache_.assign(slots, CacheSlot{});
     for (size_t i = 0; i < n; ++i) {
         if (normalImpulse_[i] <= 0.0f) continue;
         uint64_t key = contactKey_[i];
         uint32_t slot = static_cast<uint32_t>(key) & cacheMask_;
-        while (cacheKey_[slot] != 0 && cacheKey_[slot] != key) slot = (slot + 1) & cacheMask_;
-        cacheKey_[slot] = key;
-        cacheImpulse_[slot] = normalImpulse_[i];
+        while (cache_[slot].key != 0 && cache_[slot].key != key) slot = (slot + 1) & cacheMask_;
+        cache_[slot].key = key;
+        cache_[slot].impulse = normalImpulse_[i];
     }
 }
 
@@ -742,7 +741,7 @@ size_t PhysicsWorld::bytesUsed() const {
                    bytes(asleep_) + bytes(deepest_) + bytes(reach_) + bytes(bodyLo_) + bytes(bodyHi_) +
                    bytes(entryOffset_) + bytes(entryBucket_) + bytes(cellStart_) + bytes(entries_) +
                    bytes(contacts_) + bytes(normalImpulse_) + bytes(restitutionBias_) + bytes(contactKey_) +
-                   bytes(cacheKey_) + bytes(cacheImpulse_) + bytes(bodyColorMask_) + bytes(contactColor_) +
+                   bytes(cache_) + bytes(bodyColorMask_) + bytes(contactColor_) +
                    bytes(colorStart_) + bytes(colorOrder_);
     for (const auto& c : contactChunks_) total += bytes(c);
     return total;
