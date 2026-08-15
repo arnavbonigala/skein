@@ -71,6 +71,9 @@ else()
   message(STATUS "glfw3 not found; skipping the interactive skein_demo target")
 endif()
 
+add_executable(skein_bench bench/bench.cpp)
+target_link_libraries(skein_bench PRIVATE skein_app)
+
 add_executable(skein_tests
   tests/test_main.cpp
   tests/test_math.cpp
