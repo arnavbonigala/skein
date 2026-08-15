@@ -57,7 +57,12 @@ split across the job system.
 
 **Job system** — one deque per worker, LIFO on the owner's end and FIFO for
 thieves. The submitting thread participates rather than blocking, so nested
-`parallelFor` calls make progress instead of deadlocking.
+`parallelFor` calls make progress instead of deadlocking. A parallel pass
+queues one task per worker, not one per chunk, and the chunks are handed out
+through an atomic cursor: the queue mutex and the `std::function` allocation
+are paid once per thread instead of once per chunk, which took a 64-chunk
+dispatch from 34.5 µs to 5.2 µs. That floor matters because the coloured solver
+pays it once per colour per iteration.
 
 **Renderer** — OpenGL 4.1 core against the macOS system framework, so no
 loader library. Culling produces a counting-sorted run of `(mesh, material)`
