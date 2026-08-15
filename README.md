@@ -31,7 +31,7 @@ Requires CMake 3.20, a C++20 compiler, Lua and (for the interactive demo) GLFW.
 brew install cmake lua glfw
 cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
 cmake --build build -j
-./build/skein_tests     # 89 tests
+./build/skein_tests     # 90 tests
 ./build/skein_bench     # headless CPU benchmark
 ./build/skein_bench --sweep   # plus the 25k to 1M scaling sweep
 ./build/skein_demo      # interactive window
@@ -139,8 +139,10 @@ so an impulse applied at arm's length spins the body it lands on and the
 orientation it produces goes back onto the `Transform`. The effective mass of a
 contact therefore includes how much the pair resists being rotated there, and
 friction resolves along the direction the surfaces are actually sliding in.
-Inertia is one scalar per body rather than a rotated tensor, which is what holds
-the whole addition to about a tenth of the step.
+Inertia is a real tensor: the diagonal for the body's own shape, rotated into
+the world once a step and applied as a symmetric matrix, so a long slab tumbles
+end over end far more readily than it spins about its length. A test asserts
+exactly that, at better than five to one.
 
 Sliding friction cannot slow a ball that is already rolling: its contact point
 is stationary, so there is nothing left for friction to act on and a pile of
@@ -165,10 +167,15 @@ rotation is identity keeps the cheap axis-aligned path, which reports the
 corners of the rectangle the two faces share rather than a point in the middle
 of it, and pairs the three world axes already separate never reach the fifteen.
 
-The positional pass had to learn to rotate with it. A box resting on one deep
-corner is separated by turning it; a solver that can only translate lifts it off
-its other corners instead and leaves it tilted for good, which is visible as a
-stack that creeps upward and then slides apart.
+The positional pass deliberately does not rotate. A box resting on one deep
+corner is separated fastest by turning it, and letting the push do that works
+for one box — but the push is a correction with no momentum behind it, and a
+column fed a few degrees of it per frame leans further every frame until it
+goes over. Rolling resistance is refused at flat contacts for the same reason:
+a ball needs it because its contact point is stationary and sliding friction
+never reaches it, while a box face is already held by the four points friction
+acts at, so spending it there only torques the stack. Neither is enough alone.
+A column of eight boxes stands only with both removed.
 
 **Substeps** — the step is solved in four substeps of two iterations rather than
 in one pass of eight. A substep integrates velocity, sweeps the contacts, and
@@ -500,7 +507,7 @@ objects drop out, `O` pauses, `P` dumps the frame profile, `V` toggles vsync,
 
 ## Tests
 
-89 tests, no framework. They cover the parts where being wrong is quiet: the
+90 tests, no framework. They cover the parts where being wrong is quiet: the
 hashed grid must return exactly the brute-force contact set even when collider
 sizes vary 70x, the coloured parallel solver must land bitwise on the serial
 result, a stack of eight spheres must still be standing after ten seconds, a
@@ -508,7 +515,10 @@ pile that has gone to sleep must be no more interpenetrated than one that has
 not and must wake when a script throws it somewhere else, a body crossing
 twelve times its own radius in one step must not end up on the far side of a
 wall, an off-centre hit must spin the body it lands on while a hit through the
-centres must not, a skidding ball must end up rolling and then stop, clustered
+centres must not, a box set down on a face must rest on four contacts rather
+than balance on one and must slide upright when pushed, a slab must tumble end
+over end at least five times more readily than it spins about its own length,
+a skidding ball must end up rolling and then stop, clustered
 culling must keep exactly the objects the flat path keeps and
 must re-sort only once motion has actually loosened the order, a
 2,000-entity hierarchy with destroyed parents must survive a serialization
