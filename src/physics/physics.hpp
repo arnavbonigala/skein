@@ -166,9 +166,9 @@ private:
     /// turned far enough for them to differ from the world axes.
     std::vector<Vec3> axis_;
     std::vector<uint8_t> rotated_;
-    /// Isotropic inverse inertia: one scalar rather than a tensor.
-    /// ponytail: a long box therefore tumbles like a ball of the same size;
-    /// store the diagonal and rotate it if elongated bodies ever matter.
+    /// The mean of the real tensor's diagonal, which answers "how freely does
+    /// this turn at all" for the places that only need to know whether it
+    /// turns. The tensor itself is `invInertiaWorld_`.
     std::vector<float> invInertia_;
     std::vector<Vec3> pseudo_;
     /// How far each body has moved and turned since the contacts were found,
