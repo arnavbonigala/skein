@@ -434,6 +434,31 @@ TEST(a_fast_body_does_not_pass_through_a_thin_wall) {
     CHECK(scene.world.get<Transform>(bullet).position.y > 0.2f);
 }
 
+TEST(a_speculative_contact_stops_a_bullet_at_the_surface_not_inside_it) {
+    Scene scene;
+    Entity target = spawnSphere(scene, Vec3{0, 0, 0}, Vec3{0, 0, 0}, 0.5f, 0.0f);
+    Entity bullet = spawnSphere(scene, Vec3{-8.0f, 0, 0}, Vec3{90.0f, 0, 0}, 0.2f);
+
+    PhysicsWorld physics;
+    physics.settings.useBounds = false;
+    physics.settings.gravity = Vec3{0, 0, 0};
+    physics.settings.linearDamping = 0.0f;
+    physics.settings.maxSubsteps = 1;
+
+    float worstOverlap = 0.0f;
+    for (int i = 0; i < 60; ++i) {
+        physics.step(scene, 1.0f / 60.0f, nullptr);
+        float gap = length(scene.world.get<Transform>(bullet).position -
+                           scene.world.get<Transform>(target).position);
+        worstOverlap = std::max(worstOverlap, 0.7f - gap);
+    }
+
+    // Without the gap contact the bullet covers 1.5 m in a step and is already
+    // out the far side before anything is tested.
+    CHECK(scene.world.get<Transform>(bullet).position.x < 0.0f);
+    CHECK(worstOverlap < 0.1f);
+}
+
 TEST(a_discrete_solver_needs_substeps_for_the_same_wall) {
     Scene scene;
     Transform wallT;
