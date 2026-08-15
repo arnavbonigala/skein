@@ -436,6 +436,59 @@ int main(int argc, char** argv) {
         report("axis-aligned, 4 x 1       ", tower(false, 4, 1));
     }
 
+    heading("hanging chains (400 ropes of 12 links)");
+    {
+        // A rope is the case warm starting is built for: the top link carries
+        // eleven times the load of the bottom one, and the load only reaches it
+        // by travelling up the chain one joint per sweep. Cold, the chain
+        // stretches every frame and spends the next one catching up.
+        auto ropes = [&](bool warm) {
+            Scene scene;
+            PhysicsWorld world;
+            world.settings.useBounds = false;
+            world.settings.allowSleep = false;
+            world.settings.warmStart = warm;
+            auto ball = [&](Vec3 p, float invMass) {
+                Transform t;
+                t.position = p;
+                Entity e = scene.create(t);
+                scene.world.add<Velocity>(e, Velocity{});
+                Collider c;
+                c.radius = 0.2f;
+                c.invMass = invMass;
+                c.kind = static_cast<uint32_t>(ColliderKind::Sphere);
+                scene.world.add<Collider>(e, c);
+                return e;
+            };
+            std::vector<Entity> ends;
+            for (int r = 0; r < 400; ++r) {
+                const float x = static_cast<float>(r % 20) * 2.0f - 20.0f;
+                const float z = static_cast<float>(r / 20) * 2.0f - 20.0f;
+                Entity previous = ball(Vec3{x, 14.0f, z}, 0.0f);
+                for (int i = 0; i < 12; ++i) {
+                    Entity e = ball(Vec3{x, 13.0f - static_cast<float>(i), z}, 1.0f);
+                    Joint j;
+                    j.other = previous;
+                    j.length = 1.0f;
+                    scene.world.add<Joint>(e, j);
+                    previous = e;
+                }
+                ends.push_back(previous);
+            }
+            for (int i = 0; i < 240; ++i) world.step(scene, 1.0f / 60.0f, &jobs);
+            double stretch = 0;
+            for (Entity e : ends) stretch += 2.0 - scene.world.get<Transform>(e).position.y;
+            Timing t = measure(3, 30, [&] { world.step(scene, 1.0f / 60.0f, &jobs); });
+            return std::make_pair(t.median, stretch / static_cast<double>(ends.size()));
+        };
+        auto [warmMs, warmStretch] = ropes(true);
+        auto [coldMs, coldStretch] = ropes(false);
+        row("warm started", warmMs, format("%.1f mm of stretch at the free end", warmStretch * 1000.0));
+        row("from nothing each step", coldMs, format("%.1f mm of stretch at the free end", coldStretch * 1000.0));
+        fact("4800 joints", "solved serially: a scene has orders of magnitude fewer of them than contacts, and "
+                            "colouring them means one graph over both");
+    }
+
     heading("sleeping bodies");
     {
         // Each configuration gets its own world: continuing one run from
