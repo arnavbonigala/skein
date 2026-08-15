@@ -258,6 +258,24 @@ At a million entities the ECS integrate pass is 2.1 ns per entity and 433,333
 renderables cull and batch in 2.4 ms, with the clustered and flat paths
 agreeing on the visible set at every size.
 
+### What warm starting buys a stack
+
+Thirty-two columns of eight spheres, dropped and left for ten seconds, then
+measured by where the top sphere ended up. A perfect stack puts it at 7.50.
+
+| Solver iterations | Cold | Warm started |
+|---|---|---|
+| 2 | 3.68 — 45% of the stack standing | 7.25 — **96%** |
+| 4 | 6.14 — 81% | 7.35 — **98%** |
+| 8 | 7.24 — 96% | 7.41 — **99%** |
+| 16 | 7.39 — 98% | 7.43 — **99%** |
+
+A cold solver needs eight iterations to reach what warm starting reaches in
+two, because the reaction holding a column up travels one contact per
+iteration. Reusing each contact's accumulated impulse removes that dependency
+on stack height, and it is what makes sleeping possible at all: a pile that
+never converges never goes still enough to sleep.
+
 ### Culling and broadphase effectiveness
 
 37,000 candidates against a 65° frustum: **25,230 kept, 11,770 rejected
