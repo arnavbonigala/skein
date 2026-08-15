@@ -24,6 +24,12 @@ constexpr float kMaxSeparation = 2.0f;
 /// the contact point is stationary — so without this a pile of spheres jostles
 /// forever and never sleeps.
 constexpr float kRollingFriction = 0.25f;
+/// How far a clipped manifold point may sit above the face and still be kept.
+/// A resting box tips by a fraction of a millimetre each frame; dropping the
+/// corners that lift by that much leaves it standing on two points and tipping
+/// further. The solver already reads a point above the surface as a bound on
+/// approach rather than an overlap, so keeping them costs nothing.
+constexpr float kManifoldSkin = 0.02f;
 /// Overlap a sleeping body refuses to tolerate.
 // ponytail: absolute, not relative to body size; scale it by radius if scenes
 // ever mix boulders with pebbles.
@@ -73,6 +79,202 @@ uint64_t contactKey(uint64_t ea, uint64_t eb) {
     return h | 1ull;
 }
 
+/// Half-width of a box along an arbitrary direction.
+float project(const Vec3* axes, const Vec3& half, const Vec3& n) {
+    return std::abs(dot(axes[0], n)) * half.x + std::abs(dot(axes[1], n)) * half.y +
+           std::abs(dot(axes[2], n)) * half.z;
+}
+
+/// Corner furthest along `n`.
+Vec3 support(const Vec3& center, const Vec3* axes, const Vec3& half, const Vec3& n) {
+    return center + axes[0] * std::copysign(half.x, dot(axes[0], n)) +
+           axes[1] * std::copysign(half.y, dot(axes[1], n)) + axes[2] * std::copysign(half.z, dot(axes[2], n));
+}
+
+/// One box as the clipper sees it.
+struct BoxRef {
+    Vec3 center;
+    const Vec3* axes;
+    Vec3 half;
+};
+
+/// Clip the incident box's nearest face against the side planes of the
+/// reference face and keep the points that are still touching. A single point
+/// cannot hold a flat face down: a box resting on a box rocks about it forever,
+/// which is what the corners of the contact patch are for.
+int clipFace(const BoxRef& ref, int refAxis, float refSign, const BoxRef& inc, float margin, Vec3* points,
+             float* depths, uint32_t* ids) {
+    const Vec3 refNormal = ref.axes[refAxis] * refSign;
+
+    int incAxis = 0;
+    float most = -1.0f;
+    for (int k = 0; k < 3; ++k) {
+        float d = std::abs(dot(inc.axes[k], refNormal));
+        if (d <= most) continue;
+        most = d;
+        incAxis = k;
+    }
+    const float incSign = dot(inc.axes[incAxis], refNormal) > 0.0f ? -1.0f : 1.0f;
+    const int iu = (incAxis + 1) % 3, iv = (incAxis + 2) % 3;
+    const Vec3 incCenter = inc.center + inc.axes[incAxis] * (incSign * inc.half[incAxis]);
+    const Vec3 eu = inc.axes[iu] * inc.half[iu];
+    const Vec3 ev = inc.axes[iv] * inc.half[iv];
+
+    Vec3 poly[8] = {incCenter - eu - ev, incCenter + eu - ev, incCenter + eu + ev, incCenter - eu + ev};
+    // Each point carries where it came from — an incident corner, or the edge
+    // between two of them cut by one of the reference face's side planes. That
+    // is what a point is called next frame too, however far the pair has crept,
+    // so the impulse it accumulated finds it again.
+    uint32_t tag[8] = {0, 1, 2, 3};
+    int count = 4;
+    Vec3 scratch[8];
+    uint32_t scratchTag[8];
+
+    const int ru = (refAxis + 1) % 3, rv = (refAxis + 2) % 3;
+    const int sideAxis[4] = {ru, ru, rv, rv};
+    const float sideSign[4] = {1.0f, -1.0f, 1.0f, -1.0f};
+    for (int plane = 0; plane < 4 && count > 0; ++plane) {
+        const Vec3 n = ref.axes[sideAxis[plane]] * sideSign[plane];
+        const float limit = ref.half[sideAxis[plane]] + dot(ref.center, n);
+        int out = 0;
+        for (int i = 0; i < count; ++i) {
+            const Vec3& a = poly[i];
+            const Vec3& b = poly[(i + 1) % count];
+            const float da = dot(a, n) - limit;
+            const float db = dot(b, n) - limit;
+            if (da <= 0.0f) {
+                scratchTag[out] = tag[i];
+                scratch[out++] = a;
+            }
+            if ((da < 0.0f) != (db < 0.0f) && out < 8) {
+                scratchTag[out] = 4u + static_cast<uint32_t>(plane) * 4u + (tag[i] & 3u);
+                scratch[out++] = a + (b - a) * (da / (da - db));
+            }
+            if (out >= 8) break;
+        }
+        count = out;
+        for (int i = 0; i < count; ++i) {
+            poly[i] = scratch[i];
+            tag[i] = scratchTag[i];
+        }
+    }
+
+    const float faceOffset = dot(ref.center, refNormal) + ref.half[refAxis];
+    int kept = 0;
+    for (int i = 0; i < count; ++i) {
+        const float depth = faceOffset - dot(poly[i], refNormal);
+        if (depth < -margin) continue;
+        points[kept] = poly[i];
+        depths[kept] = depth;
+        ids[kept] = tag[i] | (static_cast<uint32_t>(refAxis) << 8) | (static_cast<uint32_t>(incAxis) << 10) |
+                    (refSign > 0.0f ? 1u << 12 : 0u) | (incSign > 0.0f ? 1u << 13 : 0u);
+        ++kept;
+    }
+    if (kept <= 4) return kept;
+    // Four points is what a box face needs, and which four decides whether the
+    // pair is stable: dropping the shallowest leaves the choice to rounding
+    // noise on a patch whose points are all at the same depth, and the set then
+    // changes every frame. Picking the widest quad instead depends on the
+    // shape of the patch, which does not flicker.
+    int pick[4];
+    pick[0] = 0;
+    for (int i = 1; i < kept; ++i)
+        if (depths[i] > depths[pick[0]]) pick[0] = i;
+    pick[1] = pick[0];
+    float far = -1.0f;
+    for (int i = 0; i < kept; ++i) {
+        float d = length2(points[i] - points[pick[0]]);
+        if (d <= far) continue;
+        far = d;
+        pick[1] = i;
+    }
+    const Vec3 edge = points[pick[1]] - points[pick[0]];
+    pick[2] = pick[0];
+    float widest = -1.0f;
+    for (int i = 0; i < kept; ++i) {
+        float area = length2(cross(edge, points[i] - points[pick[0]]));
+        if (area <= widest) continue;
+        widest = area;
+        pick[2] = i;
+    }
+    pick[3] = pick[0];
+    float best = -1.0f;
+    for (int i = 0; i < kept; ++i) {
+        if (i == pick[0] || i == pick[1] || i == pick[2]) continue;
+        float area = length2(cross(points[pick[2]] - points[pick[1]], points[i] - points[pick[1]])) +
+                     length2(cross(points[pick[2]] - points[pick[0]], points[i] - points[pick[0]]));
+        if (area <= best) continue;
+        best = area;
+        pick[3] = i;
+    }
+    Vec3 keptPoints[4];
+    float keptDepths[4];
+    uint32_t keptIds[4];
+    for (int i = 0; i < 4; ++i) {
+        keptPoints[i] = points[pick[i]];
+        keptDepths[i] = depths[pick[i]];
+        keptIds[i] = ids[pick[i]];
+    }
+    for (int i = 0; i < 4; ++i) {
+        points[i] = keptPoints[i];
+        depths[i] = keptDepths[i];
+        ids[i] = keptIds[i];
+    }
+    return 4;
+}
+
+/// Separating-axis test between two oriented boxes. Returns false only when a
+/// axis leaves them further apart than `margin`; otherwise `depth` is the least
+/// overlap found, negative when the pair is still apart, and `normal` points
+/// from a towards b. The contact point is the midpoint of the two support
+/// points along that axis, which is the corner or edge actually in contact.
+bool satBoxes(const Vec3& ca, const Vec3* axa, const Vec3& ha, const Vec3& cb, const Vec3* axb, const Vec3& hb,
+              float margin, Vec3& normal, float& depth, Vec3& point, int& bestIndex) {
+    const Vec3 d = cb - ca;
+    // The separating axis is the one that leaves the least overlap: it is the
+    // shortest push that would part them, and every other axis overlaps more
+    // only because it is looking along the pair rather than across it.
+    float best = std::numeric_limits<float>::max();
+    float bestBiased = std::numeric_limits<float>::max();
+    Vec3 bestAxis{0, 1, 0};
+    bestIndex = -1;
+    int index = 0;
+    auto test = [&](const Vec3& n) {
+        const int slot = index++;
+        float len2 = length2(n);
+        if (len2 < 1e-8f) return true;
+        const Vec3 u = n / std::sqrt(len2);
+        float overlap = project(axa, ha, u) + project(axb, hb, u) - std::abs(dot(d, u));
+        if (overlap < -margin) return false;
+        // A face axis is preferred over an edge-cross axis that is barely
+        // better, since the face is the one with a patch to clip and a normal
+        // that does not swing about as the pair settles.
+        float biased = overlap + (slot < 6 ? 0.0f : 1e-3f);
+        // Two parallel faces overlap by the same amount along both of their
+        // normals. Requiring a real improvement to switch keeps the choice from
+        // alternating on rounding noise, which would hand the solver a fresh set
+        // of contact points every frame and lose everything it had accumulated.
+        if (biased < bestBiased - 1e-4f) {
+            bestBiased = biased;
+            best = overlap;
+            bestAxis = dot(d, u) < 0.0f ? -u : u;
+            bestIndex = slot;
+        }
+        return true;
+    };
+    for (int i = 0; i < 3; ++i)
+        if (!test(axa[i])) return false;
+    for (int i = 0; i < 3; ++i)
+        if (!test(axb[i])) return false;
+    for (int i = 0; i < 3; ++i)
+        for (int j = 0; j < 3; ++j)
+            if (!test(cross(axa[i], axb[j]))) return false;
+    normal = bestAxis;
+    depth = best;
+    point = (support(ca, axa, ha, bestAxis) + support(cb, axb, hb, -bestAxis)) * 0.5f;
+    return true;
+}
+
 uint32_t nextPow2(uint32_t v) {
     uint32_t p = 1;
     while (p < v) p <<= 1;
@@ -98,6 +300,8 @@ void PhysicsWorld::gather(Scene& scene) {
     angular_.resize(n);
     orientation_.resize(n);
     invInertia_.resize(n);
+    axis_.resize(n * 3);
+    rotated_.resize(n);
     halfExtent_.resize(n);
     radius_.resize(n);
     invMass_.resize(n);
@@ -126,6 +330,17 @@ void PhysicsWorld::gather(Scene& scene) {
         velocity_[m] = linear;
         angular_[m] = v ? v->angular : Vec3{0, 0, 0};
         orientation_[m] = t->rotation;
+        // A box whose rotation is identity is its own axis-aligned extent, and
+        // the cheap test is exact for it. Everything else carries its three
+        // world axes so the narrowphase can separate it along them.
+        bool turned = settings.rotatedBoxes && c.kind == static_cast<uint32_t>(ColliderKind::Box) &&
+                      std::abs(t->rotation.w) < 0.99999f;
+        rotated_[m] = turned ? uint8_t{1} : uint8_t{0};
+        if (turned) {
+            axis_[m * 3 + 0] = rotate(t->rotation, Vec3{1, 0, 0});
+            axis_[m * 3 + 1] = rotate(t->rotation, Vec3{0, 1, 0});
+            axis_[m * 3 + 2] = rotate(t->rotation, Vec3{0, 0, 1});
+        }
         halfExtent_[m] = c.halfExtents * s;
         radius_[m] = c.radius * s;
         invMass_[m] = c.invMass;
@@ -164,6 +379,8 @@ void PhysicsWorld::gather(Scene& scene) {
         angular_.resize(m);
         orientation_.resize(m);
         invInertia_.resize(m);
+        axis_.resize(m * 3);
+        rotated_.resize(m);
         halfExtent_.resize(m);
         radius_.resize(m);
         invMass_.resize(m);
@@ -334,7 +551,11 @@ void PhysicsWorld::findContacts(JobSystem* jobs) {
     // `margin` is how far apart the pair may still be and count: the distance
     // they can close before the next test. A contact found across a gap carries
     // a negative depth, and the solver reads that as "may approach this far".
-    auto narrow = [&](size_t i, size_t j, Contact& out, float margin) -> bool {
+    // Returns how many contact points the pair produced: one for anything
+    // curved, up to four where two box faces meet, since a single point cannot
+    // stop a flat face from rocking about it.
+    auto narrowAll = [&](size_t i, size_t j, Contact* manifold, float margin) -> int {
+        Contact& out = manifold[0];
         bool boxA = kind_[i] == static_cast<uint32_t>(ColliderKind::Box);
         bool boxB = kind_[j] == static_cast<uint32_t>(ColliderKind::Box);
         if (!boxA && !boxB) {
@@ -342,17 +563,51 @@ void PhysicsWorld::findContacts(JobSystem* jobs) {
             float rsum = radius_[i] + radius_[j];
             float reach = rsum + margin;
             float dist2 = length2(d);
-            if (dist2 >= reach * reach || dist2 < 1e-12f) return false;
+            if (dist2 >= reach * reach || dist2 < 1e-12f) return 0;
             float dist = std::sqrt(dist2);
             out.normal = d / dist;
             out.depth = rsum - dist;
             out.point = position_[i] + out.normal * (radius_[i] - 0.5f * out.depth);
-            return true;
+            return 1;
         }
         if (boxA && boxB) {
+            if (rotated_[i] || rotated_[j]) {
+                static const Vec3 world[3] = {{1, 0, 0}, {0, 1, 0}, {0, 0, 1}};
+                const Vec3* axa = rotated_[i] ? &axis_[i * 3] : world;
+                const Vec3* axb = rotated_[j] ? &axis_[j * 3] : world;
+                int axisIndex = -1;
+                if (!satBoxes(position_[i], axa, halfExtent_[i], position_[j], axb, halfExtent_[j], margin,
+                              out.normal, out.depth, out.point, axisIndex))
+                    return 0;
+                if (axisIndex < 0 || axisIndex >= 6) return 1;
+                // The axis that separated them names the face doing the
+                // holding; the other box's nearest face is clipped against it.
+                const BoxRef boxA{position_[i], axa, halfExtent_[i]};
+                const BoxRef boxB{position_[j], axb, halfExtent_[j]};
+                const bool refIsA = axisIndex < 3;
+                const BoxRef& ref = refIsA ? boxA : boxB;
+                const BoxRef& inc = refIsA ? boxB : boxA;
+                const int refAxis = axisIndex % 3;
+                const Vec3 refNormal = refIsA ? out.normal : -out.normal;
+                const float refSign = dot(ref.axes[refAxis], refNormal) < 0.0f ? -1.0f : 1.0f;
+                Vec3 points[8];
+                float depths[8];
+                uint32_t ids[8];
+                int count = clipFace(ref, refAxis, refSign, inc, margin + kManifoldSkin, points, depths, ids);
+                if (count == 0) return 1;
+                for (int k = 0; k < count; ++k) {
+                    manifold[k].a = out.a;
+                    manifold[k].b = out.b;
+                    manifold[k].normal = out.normal;
+                    manifold[k].depth = depths[k];
+                    manifold[k].id = ids[k] | (refIsA ? 1u << 14 : 0u);
+                    manifold[k].point = points[k];
+                }
+                return count;
+            }
             Vec3 d = position_[j] - position_[i];
             Vec3 overlap = (halfExtent_[i] + halfExtent_[j] + Vec3{margin, margin, margin}) - vabs(d);
-            if (overlap.x <= 0 || overlap.y <= 0 || overlap.z <= 0) return false;
+            if (overlap.x <= 0 || overlap.y <= 0 || overlap.z <= 0) return 0;
             int axis = overlap.x < overlap.y ? (overlap.x < overlap.z ? 0 : 2) : (overlap.y < overlap.z ? 1 : 2);
             Vec3 nrm{0, 0, 0};
             nrm[axis] = d[axis] < 0 ? -1.0f : 1.0f;
@@ -369,11 +624,16 @@ void PhysicsWorld::findContacts(JobSystem* jobs) {
                 p[k] = 0.5f * (std::max(loA, loB) + std::min(hiA, hiB));
             }
             out.point = p;
-            return true;
+            return 1;
         }
         size_t s = boxA ? j : i;
         size_t b = boxA ? i : j;
+        // A turned box is met in its own frame: the clamp is the same test,
+        // and the point and normal are rotated back out at the end.
+        const bool turned = rotated_[b] != 0;
+        const Quat inv = turned ? conjugate(orientation_[b]) : Quat{};
         Vec3 rel = position_[s] - position_[b];
+        if (turned) rel = rotate(inv, rel);
         Vec3 clamped{std::clamp(rel.x, -halfExtent_[b].x, halfExtent_[b].x),
                      std::clamp(rel.y, -halfExtent_[b].y, halfExtent_[b].y),
                      std::clamp(rel.z, -halfExtent_[b].z, halfExtent_[b].z)};
@@ -381,7 +641,7 @@ void PhysicsWorld::findContacts(JobSystem* jobs) {
         float dist2 = length2(delta);
         float r = radius_[s];
         float reach = r + margin;
-        if (dist2 >= reach * reach) return false;
+        if (dist2 >= reach * reach) return 0;
         Vec3 nrm;
         float depth;
         if (dist2 < 1e-12f) {
@@ -395,14 +655,16 @@ void PhysicsWorld::findContacts(JobSystem* jobs) {
             nrm = delta / dist;
             depth = r - dist;
         }
+        Vec3 contactPoint = position_[b] + (turned ? rotate(orientation_[b], clamped) : clamped);
+        if (turned) nrm = rotate(orientation_[b], nrm);
         if (boxA) {
             out.normal = nrm;
         } else {
             out.normal = -nrm;
         }
         out.depth = depth;
-        out.point = position_[b] + clamped;
-        return true;
+        out.point = contactPoint;
+        return 1;
     };
 
     // Bodies are registered in every cell they overlap, so an overlapping pair
@@ -449,8 +711,9 @@ void PhysicsWorld::findContacts(JobSystem* jobs) {
                         // the step skips would leave velocity nobody applies.
                         if (asleep_[i] && asleep_[j]) {
                             if (!audit) continue;
-                            Contact probe{i, j, Vec3{0, 1, 0}, 0, Vec3{0, 0, 0}};
-                            if (narrow(i, j, probe, 0.0f) && probe.depth > kWakeDepth) {
+                            Contact probe[4];
+                            probe[0] = Contact{i, j, Vec3{0, 1, 0}, 0, 0, Vec3{0, 0, 0}};
+                            if (narrowAll(i, j, probe, 0.0f) > 0 && probe[0].depth > kWakeDepth) {
                                 // The timer has to go back with the flag: this
                                 // pair contributes no contact this step, so
                                 // nothing else would stop the sleep test at the
@@ -469,8 +732,11 @@ void PhysicsWorld::findContacts(JobSystem* jobs) {
                             ++localDuplicates;
                             continue;
                         }
-                        Contact contact{i, j, Vec3{0, 1, 0}, 0, Vec3{0, 0, 0}};
-                        if (!narrow(i, j, contact, sweep_[i] + sweep_[j])) continue;
+                        Contact manifold[4];
+                        manifold[0] = Contact{i, j, Vec3{0, 1, 0}, 0, 0, Vec3{0, 0, 0}};
+                        int found = narrowAll(i, j, manifold, sweep_[i] + sweep_[j]);
+                        if (found == 0) continue;
+                        const Contact& contact = manifold[0];
                         // Only a body that is actually moving wakes a sleeper,
                         // or one jittering body would cascade through a settled
                         // pile and wake all of it. An overlap deep enough to
@@ -481,7 +747,7 @@ void PhysicsWorld::findContacts(JobSystem* jobs) {
                             std::atomic_ref<uint8_t>(asleep_[i]).store(0, std::memory_order_relaxed);
                         if (asleep_[j] && (deep || length2(velocity_[i]) > wakeSpeed2))
                             std::atomic_ref<uint8_t>(asleep_[j]).store(0, std::memory_order_relaxed);
-                        sink.push_back(contact);
+                        for (int m = 0; m < found; ++m) sink.push_back(manifold[m]);
                     }
                 }
                 runStart = runEnd;
@@ -637,11 +903,20 @@ void PhysicsWorld::solveRange(uint32_t begin, uint32_t end, bool positional, flo
             // separate pseudo velocity that is integrated into position and
             // then dropped, so pushing an overlap out never feeds real motion.
             float target = std::min(std::max(c.depth - kSlop, 0.0f) * kCorrection * invDt, kMaxSeparation);
-            float pvn = dot(pseudo_[c.b] - pseudo_[c.a], c.normal);
-            float push = (target - pvn) / imSum;
+            // The push has to be able to turn the body as well as move it: a box
+            // resting on one deep corner is separated by rotating about the
+            // others, and a solver that can only translate lifts it off them
+            // instead, leaving it tilted for good.
+            Vec3 pa = pseudo_[c.a] + (iiA > 0.0f ? cross(pseudoSpin_[c.a], rA) : Vec3{0, 0, 0});
+            Vec3 pb = pseudo_[c.b] + (iiB > 0.0f ? cross(pseudoSpin_[c.b], rB) : Vec3{0, 0, 0});
+            float pvn = dot(pb - pa, c.normal);
+            float push = (target - pvn) / normalMass;
             if (push > 0.0f) {
-                if (imA > 0.0f) pseudo_[c.a] -= c.normal * (push * imA);
-                if (imB > 0.0f) pseudo_[c.b] += c.normal * (push * imB);
+                const Vec3 j = c.normal * push;
+                if (imA > 0.0f) pseudo_[c.a] -= j * imA;
+                if (imB > 0.0f) pseudo_[c.b] += j * imB;
+                if (iiA > 0.0f) pseudoSpin_[c.a] -= cross(rA, j) * iiA;
+                if (iiB > 0.0f) pseudoSpin_[c.b] += cross(rB, j) * iiB;
             }
         }
     }
@@ -672,7 +947,9 @@ void PhysicsWorld::loadCachedImpulses(JobSystem* jobs) {
     approach_.resize(n);
     auto body = [&](size_t begin, size_t end) {
         for (size_t i = begin; i < end; ++i) {
-            uint64_t key = contactKey(entity_[contacts_[i].a], entity_[contacts_[i].b]);
+            uint64_t key = contactKey(entity_[contacts_[i].a], entity_[contacts_[i].b]) ^
+                           (static_cast<uint64_t>(contacts_[i].id) * 0x9E3779B97F4A7C15ull);
+            key |= 1ull;
             contactKey_[i] = key;
             float found = 0.0f;
             float foundApproach = 0.0f;
@@ -763,13 +1040,23 @@ void PhysicsWorld::storeCachedImpulses(JobSystem* jobs) {
     }
 }
 
+/// How far the body reaches along one world axis. A turned box reaches further
+/// than any of its half extents, and treating it as if it did not is what
+/// leaves it permanently buried in the floor.
+float PhysicsWorld::boundsReach(size_t i, int axis) const {
+    if (kind_[i] == static_cast<uint32_t>(ColliderKind::Sphere)) return radius_[i];
+    if (!rotated_[i]) return halfExtent_[i][axis];
+    const Vec3* ax = &axis_[i * 3];
+    return std::abs(ax[0][axis]) * halfExtent_[i].x + std::abs(ax[1][axis]) * halfExtent_[i].y +
+           std::abs(ax[2][axis]) * halfExtent_[i].z;
+}
+
 void PhysicsWorld::solveBounds(size_t begin, size_t end, float invDt) {
     const float friction = settings.friction;
     for (size_t i = begin; i < end; ++i) {
         if (invMass_[i] <= 0.0f || asleep_[i]) continue;
-        float r = kind_[i] == static_cast<uint32_t>(ColliderKind::Sphere) ? radius_[i]
-                                                                         : maxComponent(halfExtent_[i]);
         for (int axis = 0; axis < 3; ++axis) {
+            const float r = boundsReach(i, axis);
             const float lo = settings.boundsMin[axis] + r;
             const float hi = settings.boundsMax[axis] - r;
             float depth;
@@ -827,6 +1114,7 @@ void PhysicsWorld::solveBounds(size_t begin, size_t end, float invDt) {
 void PhysicsWorld::resolve(float dt, JobSystem* jobs) {
     SKEIN_PROFILE("physics/solve");
     pseudo_.assign(position_.size(), Vec3{0, 0, 0});
+    pseudoSpin_.assign(position_.size(), Vec3{0, 0, 0});
     deepest_.assign(position_.size(), 0.0f);
     const float invDt = dt > 1e-6f ? 1.0f / dt : 0.0f;
     loadCachedImpulses(jobs);
@@ -872,8 +1160,16 @@ void PhysicsWorld::resolve(float dt, JobSystem* jobs) {
     auto applyPseudo = [&](size_t begin, size_t end) {
         // A sleeper stays exactly where it was when it fell asleep; nudging it
         // is how two sleeping bodies end up merged with nothing to part them.
-        for (size_t i = begin; i < end; ++i)
-            if (!asleep_[i]) position_[i] += pseudo_[i] * dt;
+        const bool angular = settings.angularContacts;
+        for (size_t i = begin; i < end; ++i) {
+            if (asleep_[i]) continue;
+            position_[i] += pseudo_[i] * dt;
+            if (!angular) continue;
+            float spin = length(pseudoSpin_[i]);
+            if (spin > 1e-8f)
+                orientation_[i] =
+                    normalize(Quat::axisAngle(pseudoSpin_[i] / spin, spin * dt) * orientation_[i]);
+        }
     };
     if (jobs && position_.size() >= 8192)
         jobs->parallelFor(position_.size(), 4096, applyPseudo);
@@ -884,9 +1180,8 @@ void PhysicsWorld::resolve(float dt, JobSystem* jobs) {
     auto clampToBounds = [&](size_t begin, size_t end) {
         for (size_t i = begin; i < end; ++i) {
             if (invMass_[i] <= 0.0f) continue;
-            float r = kind_[i] == static_cast<uint32_t>(ColliderKind::Sphere) ? radius_[i]
-                                                                             : maxComponent(halfExtent_[i]);
             for (int axis = 0; axis < 3; ++axis) {
+                const float r = boundsReach(i, axis);
                 float lo = settings.boundsMin[axis] + r;
                 float hi = settings.boundsMax[axis] - r;
                 if (position_[i][axis] < lo) {
@@ -1111,6 +1406,12 @@ RayHit PhysicsWorld::raycast(const Vec3& origin, const Vec3& dir, float maxDista
             if (kind_[b] == static_cast<uint32_t>(ColliderKind::Sphere)) {
                 t = raySphere(origin, d, position_[b], radius_[b]);
                 if (t >= 0.0f) normal = normalize(origin + d * t - position_[b]);
+            } else if (rotated_[b]) {
+                // The ray meets a turned box in the box's own frame, where it
+                // is the same slab test; only the face normal comes back out.
+                const Quat inv = conjugate(orientation_[b]);
+                t = rayBox(rotate(inv, origin - position_[b]), rotate(inv, d), Vec3{0, 0, 0}, halfExtent_[b], normal);
+                if (t >= 0.0f) normal = rotate(orientation_[b], normal);
             } else {
                 t = rayBox(origin, d, position_[b], halfExtent_[b], normal);
             }
@@ -1167,6 +1468,7 @@ void PhysicsWorld::overlapSphere(const Vec3& center, float radius, std::vector<E
                         overlaps = length2(position_[b] - center) < sum * sum;
                     } else {
                         Vec3 d = center - position_[b];
+                        if (rotated_[b]) d = rotate(conjugate(orientation_[b]), d);
                         Vec3 clamped{std::clamp(d.x, -halfExtent_[b].x, halfExtent_[b].x),
                                      std::clamp(d.y, -halfExtent_[b].y, halfExtent_[b].y),
                                      std::clamp(d.z, -halfExtent_[b].z, halfExtent_[b].z)};
@@ -1182,7 +1484,7 @@ void PhysicsWorld::overlapSphere(const Vec3& center, float radius, std::vector<E
 
 size_t PhysicsWorld::bytesUsed() const {
     auto bytes = [](const auto& v) { return v.capacity() * sizeof(typename std::decay_t<decltype(v)>::value_type); };
-    size_t total = bytes(entity_) + bytes(position_) + bytes(velocity_) + bytes(angular_) +
+    size_t total = bytes(pseudoSpin_) + bytes(axis_) + bytes(rotated_) + bytes(entity_) + bytes(position_) + bytes(velocity_) + bytes(angular_) +
                    bytes(orientation_) + bytes(invInertia_) + bytes(tangentImpulse_) + bytes(approach_) +
                    bytes(sweep_) + bytes(pseudo_) + bytes(halfExtent_) +
                    bytes(radius_) + bytes(invMass_) + bytes(restitution_) + bytes(kind_) + bytes(sleepTimer_) +

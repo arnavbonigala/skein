@@ -21,7 +21,10 @@ struct PhysicsSettings {
     bool useBounds = true;
     Vec3 boundsMin{-60, 0, -60};
     Vec3 boundsMax{60, 120, 60};
-    int solverIterations = 2;
+    /// Four is what a stack of turned boxes needs: a box face is held by four
+    /// contact points at once and two passes leave the pair still sinking.
+    /// Spheres converge at two.
+    int solverIterations = 4;
     /// Upper bound on how many times a step may be split when a body would
     /// otherwise cross a collider between two tests. 1 disables splitting.
     int maxSubsteps = 4;
@@ -33,6 +36,10 @@ struct PhysicsSettings {
     /// being discovered after it has already gone through. Off is the naive
     /// discrete test, kept so the benchmark can measure the difference.
     bool speculativeContacts = true;
+    /// Test rotated boxes as oriented boxes rather than as their axis-aligned
+    /// extent. Bodies whose rotation is (near) identity take the cheap path
+    /// either way, so this only costs what the scene actually turns.
+    bool rotatedBoxes = true;
     /// Solve contacts at the point they touch rather than through the centres,
     /// so an off-centre hit spins the body. Off is the purely linear solver,
     /// kept so the benchmark can measure what the rotation costs.
@@ -108,6 +115,9 @@ private:
         uint32_t a, b;
         Vec3 normal;
         float depth;
+        /// Which point of a multi-point manifold this is, so two contacts
+        /// between the same pair keep separate cached impulses.
+        uint32_t id;
         /// Where the pair touches, in world space. Only read when the angular
         /// solver is on, but computing it is a few adds inside a test that has
         /// already found everything it needs.
@@ -121,6 +131,7 @@ private:
     void colorContacts();
     void solveRange(uint32_t begin, uint32_t end, bool positional, float invDt);
     void solveBounds(size_t begin, size_t end, float invDt);
+    float boundsReach(size_t i, int axis) const;
     void warmStart(uint32_t begin, uint32_t end);
     void loadCachedImpulses(JobSystem* jobs);
     void storeCachedImpulses(JobSystem* jobs);
@@ -133,11 +144,16 @@ private:
     std::vector<Vec3> velocity_;
     std::vector<Vec3> angular_;
     std::vector<Quat> orientation_;
+    /// World-space box axes, three per body, and whether the body is a box
+    /// turned far enough for them to differ from the world axes.
+    std::vector<Vec3> axis_;
+    std::vector<uint8_t> rotated_;
     /// Isotropic inverse inertia: one scalar rather than a tensor.
     /// ponytail: a long box therefore tumbles like a ball of the same size;
     /// store the diagonal and rotate it if elongated bodies ever matter.
     std::vector<float> invInertia_;
     std::vector<Vec3> pseudo_;
+    std::vector<Vec3> pseudoSpin_;
     std::vector<Vec3> halfExtent_;
     std::vector<float> radius_;
     std::vector<float> invMass_;

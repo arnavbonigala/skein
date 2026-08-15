@@ -771,3 +771,100 @@ TEST(contact_torque_leaves_the_orientation_it_produced_on_the_transform) {
     CHECK(std::abs(qdot(before, after)) < 0.999f);
     CHECK(std::abs(qdot(after, after) - 1.0f) < 1e-3f);
 }
+
+namespace {
+
+Entity spawnBox(Scene& s, Vec3 pos, Quat rotation, Vec3 half, float invMass = 1.0f) {
+    Transform t;
+    t.position = pos;
+    t.rotation = rotation;
+    Entity e = s.create(t);
+    s.world.add<Velocity>(e, Velocity{});
+    Collider c;
+    c.kind = static_cast<uint32_t>(ColliderKind::Box);
+    c.halfExtents = half;
+    c.invMass = invMass;
+    s.world.add<Collider>(e, c);
+    return e;
+}
+
+}  // namespace
+
+TEST(a_turned_box_is_tested_as_the_box_it_is_and_not_as_its_extent) {
+    // A unit box turned 45 degrees about y no longer reaches into the corner
+    // its axis-aligned extent covers, so a sphere parked there touches one and
+    // misses the other.
+    auto contactsAt = [](bool rotatedBoxes) {
+        Scene scene;
+        spawnBox(scene, Vec3{0, 0, 0}, Quat::axisAngle(Vec3{0, 1, 0}, PI * 0.25f), Vec3{1, 1, 1}, 0.0f);
+        spawnSphere(scene, Vec3{0.95f, 0, 0.95f}, Vec3{0, 0, 0}, 0.2f, 0.0f);
+        PhysicsWorld physics;
+        physics.settings.gravity = Vec3{0, 0, 0};
+        physics.settings.useBounds = false;
+        physics.settings.rotatedBoxes = rotatedBoxes;
+        return physics.step(scene, 1.0f / 60.0f, nullptr).contacts;
+    };
+    CHECK_EQ(contactsAt(false), 1u);
+    CHECK_EQ(contactsAt(true), 0u);
+}
+
+TEST(a_turned_box_stack_stands_and_settles) {
+    Scene scene;
+    spawnBox(scene, Vec3{0, -1, 0}, Quat{}, Vec3{20, 1, 20}, 0.0f);
+    std::vector<Entity> stack;
+    for (int i = 0; i < 4; ++i)
+        stack.push_back(spawnBox(scene, Vec3{0, 0.5f + i * 1.02f, 0},
+                                 Quat::axisAngle(Vec3{0, 1, 0}, 0.35f * static_cast<float>(i)),
+                                 Vec3{0.5f, 0.5f, 0.5f}));
+
+    PhysicsWorld physics;
+    physics.settings.useBounds = false;
+    physics.settings.allowSleep = false;
+    for (int f = 0; f < 400; ++f) physics.step(scene, 1.0f / 60.0f, nullptr);
+
+    // Every box must still be at its own level: a solver that only translates
+    // its way out of a corner contact lifts a turned box off the others and the
+    // column ends up leaning or lying down.
+    for (size_t i = 0; i < stack.size(); ++i) {
+        float y = scene.world.get<Transform>(stack[i]).position.y;
+        float want = 0.5f + static_cast<float>(i) * 1.0f;
+        if (std::abs(y - want) >= 0.2f) std::printf("   box %zu at %.3f want %.3f\n", i, y, want);
+        CHECK(std::abs(y - want) < 0.2f);
+        CHECK(length(scene.world.get<Velocity>(stack[i]).linear) < 0.5f);
+    }
+    // A flat face has to be held by more than the one point a corner would give.
+    CHECK(physics.stats().contacts >= 12u);
+}
+
+TEST(a_turned_box_comes_to_rest_flat_rather_than_propped_on_a_corner) {
+    Scene scene;
+    spawnBox(scene, Vec3{0, -1, 0}, Quat{}, Vec3{20, 1, 20}, 0.0f);
+    Entity box = spawnBox(scene, Vec3{0, 2.0f, 0}, Quat::axisAngle(Vec3{0, 1, 0}, 0.6f), Vec3{0.5f, 0.5f, 0.5f});
+    PhysicsWorld physics;
+    physics.settings.useBounds = false;
+    physics.settings.allowSleep = false;
+    for (int f = 0; f < 300; ++f) physics.step(scene, 1.0f / 60.0f, nullptr);
+    const Transform& t = scene.world.get<Transform>(box);
+    CHECK(std::abs(t.position.y - 0.5f) < 0.03f);
+    // Dropped flat and turned only about the vertical, it must land flat: the
+    // up axis is still up.
+    Vec3 up = rotate(t.rotation, Vec3{0, 1, 0});
+    CHECK(up.y > 0.99f);
+}
+
+TEST(a_ray_meets_a_turned_box_where_its_face_actually_is) {
+    Scene scene;
+    spawnBox(scene, Vec3{0, 0, 0}, Quat::axisAngle(Vec3{0, 1, 0}, PI * 0.25f), Vec3{1, 1, 1}, 0.0f);
+    PhysicsWorld physics;
+    physics.settings.gravity = Vec3{0, 0, 0};
+    physics.settings.useBounds = false;
+    physics.step(scene, 1.0f / 60.0f, nullptr);
+
+    // Along +x the turned box presents its edge at sqrt(2), not its face at 1.
+    RayHit hit = physics.raycast(Vec3{-5, 0, 0}, Vec3{1, 0, 0}, 20.0f);
+    CHECK(hit.hit);
+    CHECK(std::abs(hit.distance - (5.0f - std::sqrt(2.0f))) < 0.01f);
+    CHECK(hit.normal.x < -0.6f);
+    // And a ray that would have hit the axis-aligned corner misses entirely.
+    CHECK(!physics.raycast(Vec3{0.9f, 5, 0.9f}, Vec3{0, -1, 0}, 20.0f).hit);
+}
