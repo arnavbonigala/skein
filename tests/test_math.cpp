@@ -122,6 +122,41 @@ TEST(frustum_sphere_test_agrees_with_box_test) {
     }
 }
 
+TEST(frustum_classification_agrees_with_the_per_corner_verdict) {
+    Mat4 vp = perspective(radians(60.0f), 1.6f, 0.5f, 120.0f) *
+              lookAt(Vec3{6, 9, 30}, Vec3{0, 0, 0}, Vec3{0, 1, 0});
+    Frustum f = extractFrustum(vp);
+    std::mt19937 rng(913);
+    std::uniform_real_distribution<float> pos(-70.0f, 70.0f);
+    std::uniform_real_distribution<float> size(0.5f, 9.0f);
+    int inside = 0, outside = 0, straddling = 0;
+    for (int i = 0; i < 20000; ++i) {
+        Vec3 c{pos(rng), pos(rng), pos(rng)};
+        Vec3 e{size(rng), size(rng), size(rng)};
+        FrustumFit fit = frustumClassifyAABB(f, c, e);
+        // Inside must mean no corner can be outside, which is what lets a
+        // cluster skip every per-object test; Outside must agree with the plain
+        // AABB test, or culling would drop a visible object.
+        if (fit == FrustumFit::Inside) {
+            ++inside;
+            for (int corner = 0; corner < 8; ++corner) {
+                Vec3 p{c.x + ((corner & 1) ? e.x : -e.x), c.y + ((corner & 2) ? e.y : -e.y),
+                       c.z + ((corner & 4) ? e.z : -e.z)};
+                CHECK(frustumIntersectsAABB(f, p, Vec3{0, 0, 0}));
+            }
+        } else if (fit == FrustumFit::Outside) {
+            ++outside;
+            CHECK(!frustumIntersectsAABB(f, c, e));
+        } else {
+            ++straddling;
+            CHECK(frustumIntersectsAABB(f, c, e));
+        }
+    }
+    CHECK(inside > 0);
+    CHECK(outside > 0);
+    CHECK(straddling > 0);
+}
+
 TEST(perspective_maps_near_and_far_to_clip_range) {
     Mat4 p = perspective(radians(70.0f), 1.5f, 0.25f, 500.0f);
     Vec4 nearPoint = p * Vec4{Vec3{0, 0, -0.25f}, 1.0f};

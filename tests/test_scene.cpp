@@ -250,6 +250,62 @@ TEST(scene_survives_a_serialization_round_trip) {
     });
 }
 
+TEST(a_morton_sorted_scene_round_trips_with_every_component_still_paired) {
+    Scene original;
+    std::mt19937 rng(2027);
+    std::uniform_real_distribution<float> u(-60.0f, 60.0f);
+    std::vector<Entity> created;
+    for (int i = 0; i < 6000; ++i) {
+        Entity parent = (i > 100 && (rng() % 6) == 0) ? created[rng() % created.size()] : NULL_ENTITY;
+        Entity e = original.create(trs(Vec3{u(rng), u(rng), u(rng)}), parent);
+        created.push_back(e);
+        original.world.add<Renderable>(e, Renderable{static_cast<uint32_t>(i % 4), static_cast<uint32_t>(i % 3), 1, 0});
+        CullBounds cb;
+        cb.localExtent = Vec3{0.5f, 0.5f, 0.5f};
+        original.world.add<CullBounds>(e, cb);
+        if (i % 3 == 0) original.world.add<Velocity>(e, Velocity{Vec3{u(rng), 0, u(rng)}, Vec3{}});
+    }
+    for (int i = 0; i < 500; ++i) original.destroy(created[static_cast<size_t>(rng()) % created.size()]);
+    original.updateTransforms(nullptr);
+
+    // Sorting rewrites the dense arrays and the sparse maps under the
+    // serializer's feet, which is exactly when a stale index would show up.
+    CullSystem culler;
+    culler.sortSpatially(original);
+
+    std::vector<uint8_t> blob = serializeScene(original);
+    Scene restored;
+    std::string error;
+    CHECK(deserializeScene(restored, blob.data(), blob.size(), error));
+    CHECK_EQ(restored.world.aliveCount(), original.world.aliveCount());
+
+    Pool<Renderable>& src = original.world.pool<Renderable>();
+    for (size_t i = 0; i < src.dense.size(); ++i) {
+        Entity e = src.dense[i];
+        const Renderable* r = restored.world.tryGet<Renderable>(e);
+        const CullBounds* cb = restored.world.tryGet<CullBounds>(e);
+        CHECK(r != nullptr);
+        CHECK(cb != nullptr);
+        CHECK_EQ(r->mesh, src.data[i].mesh);
+        CHECK_EQ(r->material, src.data[i].material);
+        const Transform* a = original.world.tryGet<Transform>(e);
+        const Transform* b = restored.world.tryGet<Transform>(e);
+        CHECK(a && b);
+        CHECK_EQ(a->position.x, b->position.x);
+        CHECK_EQ(a->position.z, b->position.z);
+    }
+    restored.updateTransforms(nullptr);
+    Mat4 vp = perspective(radians(60.0f), 1.6f, 0.5f, 200.0f) *
+              lookAt(Vec3{0, 20, 90}, Vec3{0, 0, 0}, Vec3{0, 1, 0});
+    Frustum f = extractFrustum(vp);
+    CullSystem flat;
+    flat.useClusters = false;
+    RenderList before, after;
+    flat.build(original, f, 3, before, nullptr);
+    flat.build(restored, f, 3, after, nullptr);
+    CHECK_EQ(after.visible, before.visible);
+}
+
 TEST(loader_rejects_corrupt_scene_data) {
     Scene scene;
     scene.create(trs(Vec3{1, 2, 3}));
