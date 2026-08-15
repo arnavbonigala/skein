@@ -1038,6 +1038,62 @@ TEST(a_slippery_box_slides_further_and_a_pair_rubs_at_the_mean_of_the_two) {
     CHECK(ice > mixed * 3.0f);
 }
 
+TEST(everything_at_once_stays_finite_for_twenty_seconds) {
+    // Each feature has its own test and they all pass in isolation. This is
+    // the one that runs them together: spheres, turned boxes, ropes, sleeping,
+    // bounds and the job system, for twenty seconds.
+    std::mt19937 rng(4242);
+    std::uniform_real_distribution<float> p(-9.0f, 9.0f);
+    std::uniform_real_distribution<float> angle(0.0f, PI);
+
+    Scene scene;
+    for (int i = 0; i < 400; ++i)
+        spawnSphere(scene, Vec3{p(rng), 12.0f + p(rng), p(rng)}, Vec3{p(rng) * 0.2f, 0, p(rng) * 0.2f}, 0.4f);
+    for (int i = 0; i < 200; ++i)
+        spawnBox(scene, Vec3{p(rng), 20.0f + p(rng), p(rng)},
+                 Quat::axisAngle(normalize(Vec3{p(rng), p(rng) + 10.0f, p(rng)}), angle(rng)),
+                 Vec3{0.5f, 0.5f, 0.5f});
+
+    std::vector<std::pair<Entity, Entity>> links;
+    for (int r = 0; r < 8; ++r) {
+        const float x = static_cast<float>(r) * 2.0f - 8.0f;
+        Entity previous = spawnSphere(scene, Vec3{x, 28.0f, 8.0f}, Vec3{0, 0, 0}, 0.2f, 0.0f);
+        for (int i = 0; i < 6; ++i) {
+            Entity e = spawnJointed(scene, Vec3{x, 27.0f - static_cast<float>(i), 8.0f}, 0.2f, 1.0f, previous, 1.0f);
+            links.emplace_back(e, previous);
+            previous = e;
+        }
+    }
+
+    PhysicsWorld physics;
+    physics.settings.boundsMin = Vec3{-12, 0, -12};
+    physics.settings.boundsMax = Vec3{12, 40, 12};
+    JobSystem jobs(4);
+    for (int i = 0; i < 1200; ++i) physics.step(scene, 1.0f / 60.0f, &jobs);
+
+    double kinetic = 0;
+    forEach<Transform>(scene.world, [&](Entity, Transform& t) {
+        CHECK(std::isfinite(t.position.x) && std::isfinite(t.position.y) && std::isfinite(t.position.z));
+        CHECK(std::isfinite(t.rotation.x) && std::isfinite(t.rotation.w));
+        CHECK(t.position.y >= -0.05f && t.position.y <= 40.05f);
+        CHECK(std::fabs(t.position.x) <= 12.05f && std::fabs(t.position.z) <= 12.05f);
+        // A quaternion that has drifted off the unit sphere skews every
+        // orientation derived from it, and nothing else here would notice.
+        const Quat& q = t.rotation;
+        CHECK(std::fabs(std::sqrt(q.x * q.x + q.y * q.y + q.z * q.z + q.w * q.w) - 1.0f) < 1e-3f);
+    });
+    forEach<Velocity>(scene.world, [&](Entity, Velocity& v) {
+        CHECK(std::isfinite(v.linear.x) && std::isfinite(v.angular.x));
+        kinetic += length2(v.linear);
+    });
+    CHECK(kinetic < 600.0 * 4.0);
+
+    for (auto [a, b] : links) {
+        const float span = length(scene.world.get<Transform>(a).position - scene.world.get<Transform>(b).position);
+        CHECK(std::fabs(span - 1.0f) < 0.05f);
+    }
+}
+
 TEST(a_chain_still_hangs_after_being_saved_and_loaded) {
     Scene scene;
     const float link = 0.8f;
