@@ -259,6 +259,12 @@ int main(int argc, char** argv) {
                                static_cast<unsigned long long>(ps.pairsTested),
                                static_cast<unsigned long long>(ps.nearPairs),
                                static_cast<unsigned long long>(ps.duplicatePairs), ps.contacts));
+    fact("contact colouring",
+         format("%u independent sets, %u contacts each on average, %u left over and solved serially; the solve "
+                "crosses %u barriers a step",
+                ps.colors, ps.colors ? (ps.contacts - ps.serialContacts) / ps.colors : 0, ps.serialContacts,
+                ps.colors * static_cast<uint32_t>(demo.physics.settings.solverSubsteps *
+                                                  demo.physics.settings.solverIterations)));
     {
         // Speculative contacts widen every moving body by the distance it
         // covers in a step, which is a real broadphase cost on a scene that has
