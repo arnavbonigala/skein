@@ -228,21 +228,23 @@ out of those.
 
 ### Rendering, before and after batching
 
-Same scene, same camera, same frame count, only the render path changed. GPU
-time is a `GL_TIME_ELAPSED` query read one frame late so it never stalls.
-Frame time includes the full simulation step, which is ~8 ms of it.
+Same scene, same camera, same frame count, only the render path changed. The
+world is settled for 240 frames and then held still, so the four rows differ in
+exactly one thing. GPU time is a `GL_TIME_ELAPSED` query read a frame late;
+figures are medians over 200 frames with vsync off.
 
-| Path | Frame | Render CPU | GPU | Submit | Draw calls | Objects |
-|---|---|---|---|---|---|---|
-| Instanced + culled | **17.19 ms (58 fps)** | 1.12 ms | 9.32 ms | 0.31 ms | 72 | 22,844 |
-| Instanced, no culling | 20.81 ms (48 fps) | 1.91 ms | 11.58 ms | 0.55 ms | 72 | 37,316 |
-| One draw per object, culled | 31.67 ms (32 fps) | 15.44 ms | 16.10 ms | 14.02 ms | 24,050 | 20,095 |
-| One draw per object, no culling | 38.97 ms (26 fps) | 25.69 ms | 26.45 ms | 24.29 ms | 40,771 | 37,316 |
+| Path | CPU frame | GPU | Ceiling | Render CPU | Submit | Draw calls | Objects |
+|---|---|---|---|---|---|---|---|
+| Instanced + culled | **1.35 ms** | 5.33 ms | **188 fps** | 0.98 ms | 0.22 ms | 72 | 22,915 |
+| Instanced, no culling | 2.36 ms | 6.40 ms | 156 fps | 1.84 ms | 0.32 ms | 72 | 37,316 |
+| One draw per object, culled | 16.57 ms | 14.07 ms | 60 fps | 13.76 ms | 12.92 ms | 26,579 | 22,915 |
+| One draw per object, no culling | 23.83 ms | 21.50 ms | 42 fps | 22.83 ms | 21.75 ms | 40,980 | 37,316 |
 
-Batching the same 37,316 objects collapses 40,771 draw calls into 72 and cuts
-submission from 24.29 ms to 0.55 ms — **44x** — which takes the frame from 26
-to 48 fps. Once batched the frame is GPU-bound, and culling removes another
-39% of the objects for 3.6 ms more.
+Batching the same 37,316 objects collapses 40,980 draw calls into 72 and cuts
+submission from 21.75 ms to 0.32 ms — **68x** — taking the CPU frame from 23.83
+to 2.36 ms and the ceiling from 42 to 156 fps. Once batched the frame is
+GPU-bound, and culling removes another 39% of the objects for 1.1 ms of GPU
+time on top.
 
 ### Serialization, scripting, memory
 

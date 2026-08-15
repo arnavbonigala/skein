@@ -1,3 +1,4 @@
+#include <algorithm>
 #include <cstdio>
 #include <cstring>
 #include <string>
@@ -233,7 +234,11 @@ int main(int argc, char** argv) {
             {"one draw per object, culled", true, false},
             {"one draw per object, no culling", false, false},
         };
-        const int warmup = 20;
+        const int warmup = 60;
+        // The pile settles over the first couple of seconds, which would make
+        // whichever config ran first look worst. Settle once, then hold the
+        // world still so the four rows differ only in the render path.
+        for (int frame = 0; frame < 240; ++frame) demo.update(1.0f / 60.0f, &jobs);
         std::vector<CaptureResult> results;
 
         for (const CaptureConfig& c : configs) {
@@ -241,10 +246,13 @@ int main(int argc, char** argv) {
             renderer.options.instancing = c.instancing;
             CaptureResult r;
             int sampled = 0;
+            // Frame time carries the whole simulation step, which is noisy
+            // enough on a laptop that a mean says more about thermals than
+            // about the render path.
+            std::vector<double> frames, cpus, gpus, submits;
             for (int frame = 0; frame < captureFrames + warmup && !glfwWindowShouldClose(window); ++frame) {
                 Clock::time_point frameStart = Clock::now();
                 glfwPollEvents();
-                demo.update(1.0f / 60.0f, &jobs);
                 int width = 0, height = 0;
                 glfwGetFramebufferSize(window, &width, &height);
                 renderer.resize(width, height);
@@ -254,11 +262,11 @@ int main(int argc, char** argv) {
                 glfwSwapBuffers(window);
                 if (frame < warmup) continue;
                 const RenderStats& s = renderer.stats();
-                r.frameMs += millisSince(frameStart);
-                r.cpuMs += s.cpuMs;
-                r.gpuMs += s.gpuMs;
+                frames.push_back(millisSince(frameStart));
+                cpus.push_back(s.cpuMs);
+                gpus.push_back(s.gpuMs);
+                submits.push_back(s.submitMs);
                 r.cullMs += s.cullMs;
-                r.submitMs += s.submitMs;
                 r.drawCalls += s.drawCalls + s.shadowDrawCalls;
                 r.visible += s.visible;
                 r.candidates += s.candidates;
@@ -266,12 +274,22 @@ int main(int argc, char** argv) {
                 ++sampled;
             }
             double n = sampled > 0 ? sampled : 1;
-            r.frameMs /= n; r.cpuMs /= n; r.gpuMs /= n; r.cullMs /= n; r.submitMs /= n;
+            auto median = [](std::vector<double>& v) {
+                if (v.empty()) return 0.0;
+                std::sort(v.begin(), v.end());
+                return v[v.size() / 2];
+            };
+            r.frameMs = median(frames);
+            r.cpuMs = median(cpus);
+            r.gpuMs = median(gpus);
+            r.submitMs = median(submits);
+            r.cullMs /= n;
             r.drawCalls /= n; r.visible /= n; r.candidates /= n; r.triangles /= n;
             results.push_back(r);
-            std::printf("%-32s frame %6.2f ms (%5.1f fps)  render cpu %6.2f  gpu %6.2f  cull %5.2f  submit %6.2f  "
+            std::printf("%-32s cpu frame %6.2f ms  gpu %6.2f ms  (%5.1f fps ceiling)  render cpu %6.2f  cull %5.2f  submit %6.2f  "
                         "%7.0f draws  %6.0f/%6.0f visible  %.2fM tris\n",
-                        c.label, r.frameMs, 1000.0 / r.frameMs, r.cpuMs, r.gpuMs, r.cullMs, r.submitMs, r.drawCalls,
+                        c.label, r.frameMs, r.gpuMs, 1000.0 / std::max(r.frameMs, r.gpuMs), r.cpuMs, r.cullMs, r.submitMs,
+                        r.drawCalls,
                         r.visible, r.candidates, r.triangles * 1e-6);
         }
         glfwDestroyWindow(window);

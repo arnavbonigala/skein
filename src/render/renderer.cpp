@@ -249,10 +249,14 @@ void Renderer::render(Scene& scene, const Assets& assets, const Mat4& view, cons
         if (timerPrimed_) {
             GLint available = 0;
             glGetQueryObjectiv(timerQueries_[previous], GL_QUERY_RESULT_AVAILABLE, &available);
+            // A cheap frame can outrun the driver and leave the query pending
+            // forever, so after a few misses the result is worth one stall.
+            if (!available && ++timerMisses_ >= 4) available = 1;
             if (available) {
                 GLuint64 elapsed = 0;
                 glGetQueryObjectui64v(timerQueries_[previous], GL_QUERY_RESULT, &elapsed);
                 stats_.gpuMs = static_cast<double>(elapsed) * 1e-6;
+                timerMisses_ = 0;
             }
         }
         timerSlot_ = previous;
