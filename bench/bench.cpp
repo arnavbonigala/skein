@@ -309,6 +309,67 @@ int main(int argc, char** argv) {
                 speedup(churnOff, churnOn));
     }
 
+    heading("solver quality (2,000 spheres settled for 20 s)");
+    {
+        // Speed is only half of a solver. This measures what it leaves behind:
+        // how far bodies are still inside each other once the pile has stopped
+        // moving, checked against every pair rather than the ones the grid
+        // happened to report.
+        auto settle = [&](int iterations, bool warm) {
+            Scene scene;
+            PhysicsWorld world;
+            world.settings.boundsMin = Vec3{-12, 0, -12};
+            world.settings.boundsMax = Vec3{12, 60, 12};
+            world.settings.restitutionFloor = 0.0f;
+            world.settings.allowSleep = false;
+            world.settings.warmStart = warm;
+            world.settings.solverIterations = iterations;
+            std::mt19937 rng(11);
+            std::uniform_real_distribution<float> u(-10.0f, 10.0f);
+            std::vector<Entity> bodies;
+            for (int i = 0; i < 2000; ++i) {
+                Transform t;
+                t.position = Vec3{u(rng), 1.0f + static_cast<float>(i) * 0.02f, u(rng)};
+                Entity e = scene.create(t);
+                scene.world.add<Velocity>(e, Velocity{});
+                Collider c;
+                c.radius = 0.5f;
+                c.restitution = 0.0f;
+                scene.world.add<Collider>(e, c);
+                bodies.push_back(e);
+            }
+            for (int i = 0; i < 1200; ++i) world.step(scene, 1.0f / 60.0f, &jobs);
+            Timing t = measure(2, 20, [&] { world.step(scene, 1.0f / 60.0f, &jobs); });
+
+            std::vector<Vec3> p;
+            for (Entity e : bodies) p.push_back(scene.world.tryGet<Transform>(e)->position);
+            double worst = 0, sum = 0, speed = 0;
+            size_t overlapping = 0;
+            for (size_t i = 0; i < p.size(); ++i) {
+                speed = std::max<double>(speed, length(scene.world.tryGet<Velocity>(bodies[i])->linear));
+                for (size_t j = i + 1; j < p.size(); ++j) {
+                    double d = 1.0 - static_cast<double>(length(p[j] - p[i]));
+                    if (d <= 0.0) continue;
+                    worst = std::max(worst, d);
+                    sum += d;
+                    ++overlapping;
+                }
+            }
+            double mean = overlapping ? sum / static_cast<double>(overlapping) : 0.0;
+            return std::make_tuple(t.median, worst, mean, speed);
+        };
+        for (int iters : {1, 2, 4, 8}) {
+            auto [ms, worst, mean, speed] = settle(iters, true);
+            row(format("%d iteration%s, warm started", iters, iters == 1 ? " " : "s").c_str(), ms,
+                format("worst overlap %.1f%% of a radius, mean %.1f%%, fastest body %.3f m/s",
+                       100.0 * worst / 0.5, 100.0 * mean / 0.5, speed));
+        }
+        auto [coldMs, coldWorst, coldMean, coldSpeed] = settle(2, false);
+        row("2 iterations, cold", coldMs,
+            format("worst overlap %.1f%% of a radius, mean %.1f%%, fastest body %.3f m/s",
+                   100.0 * coldWorst / 0.5, 100.0 * coldMean / 0.5, coldSpeed));
+    }
+
     heading("fast bodies against a thin wall");
     {
         // Speed, not body count, is what a fixed step misses: a body that
