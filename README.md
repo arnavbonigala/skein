@@ -274,17 +274,17 @@ table below.
 
 | Pass | 1 thread | 8 threads | Speedup |
 |---|---|---|---|
-| ECS iteration (100k integrate) | 0.81 ms — 0.82 core-ms | 0.20 ms — 1.35 core-ms | 4.09x |
-| Transform hierarchy (112k) | 0.77 ms — 0.78 core-ms | 0.35 ms — 2.11 core-ms | 2.21x |
-| Physics step (30k bodies, 105k contacts) | 99.8 ms — 100.5 core-ms | 37.0 ms — 204.5 core-ms | 2.70x |
-| Cull + batch (37k candidates) | 0.59 ms — 0.60 core-ms | 0.34 ms — 1.35 core-ms | 1.75x |
-| **Full simulation frame** | **89.7 ms — 90.6 core-ms** | **36.0 ms — 179.4 core-ms** | **2.49x** |
+| ECS iteration (100k integrate) | 0.78 ms — 0.81 core-ms | 0.20 ms — 1.09 core-ms | 3.89x |
+| Transform hierarchy (112k) | 0.79 ms — 0.80 core-ms | 0.38 ms — 1.99 core-ms | 2.11x |
+| Physics step (30k bodies, 105k contacts) | 90.7 ms — 91.5 core-ms | 41.4 ms — 187.8 core-ms | 2.21x |
+| Cull + batch (37k candidates) | 0.58 ms — 0.60 core-ms | 0.40 ms — 1.83 core-ms | 1.44x |
+| **Full simulation frame** | **85.4 ms — 86.1 core-ms** | **38.7 ms — 168.9 core-ms** | **2.21x** |
 
 The core-ms columns are what parallelism actually costs. The physics step does
-2.03x the work to run 2.70x faster; the transform hierarchy does 2.7x the work
-for 2.2x, because its levels are shallow enough that dispatch is a real fraction
+2.05x the work to run 2.21x faster; the transform hierarchy does 2.5x the work
+for 2.1x, because its levels are shallow enough that dispatch is a real fraction
 of the pass. A step that cost 17 ms in an earlier revision of this table now
-costs 100: the solver runs four substeps of two iterations rather than one pass
+costs 92: the solver runs four substeps of two iterations rather than one pass
 of two, which is eight sweeps where there were two, and the scene settled into a
 denser pile than it used to. The cost buys a stack of turned boxes that stands rather than
 leans; [what the solver leaves behind](#what-the-solver-leaves-behind) prices
@@ -294,8 +294,13 @@ Thread scaling on the full simulation frame:
 
 | Threads | 1 | 2 | 3 | 4 | 6 | 8 |
 |---|---|---|---|---|---|---|
-| ms | 88.05 | 48.62 | 36.79 | 32.01 | 33.34 | 32.73 |
-| speedup | 1.02x | 1.85x | 2.44x | 2.80x | 2.69x | 2.74x |
+| ms | 109.03 | 60.87 | 50.84 | 48.82 | 44.79 | 44.43 |
+| speedup | 1.00x | 1.79x | 2.14x | 2.23x | 2.43x | 2.45x |
+
+Those six rows are sampled round robin, one frame per thread count per pass,
+rather than one thread count at a time. Measured in blocks this table came out
+saying eight threads were slower than one, which was a record of when the load
+spiked rather than a scaling curve.
 
 Scaling flattens past four threads because the M3's four efficiency cores are
 roughly a third the throughput of its performance cores, and because the
