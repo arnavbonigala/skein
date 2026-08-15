@@ -1030,9 +1030,16 @@ void PhysicsWorld::colorContacts() {
     colorStart_.assign(MAX_COLORS + 2, 0);
     for (size_t i = 0; i < n; ++i) ++colorStart_[contactColor_[i] + 1];
     for (size_t i = 1; i < colorStart_.size(); ++i) colorStart_[i] += colorStart_[i - 1];
-    colorOrder_.resize(n);
+    // The contacts are physically moved into colour order rather than reached
+    // through an index array. Every pass after this one walks a colour end to
+    // end, eight times a step across the substeps and iterations, and each of
+    // them reads five or six arrays per contact: through a permutation that is
+    // five or six scattered loads, and in order it is a prefetchable stride.
+    // The scatter is paid once.
+    sortedContacts_.resize(n);
     std::vector<uint32_t> cursor(colorStart_.begin(), colorStart_.end() - 1);
-    for (size_t i = 0; i < n; ++i) colorOrder_[cursor[contactColor_[i]]++] = static_cast<uint32_t>(i);
+    for (size_t i = 0; i < n; ++i) sortedContacts_[cursor[contactColor_[i]]++] = contacts_[i];
+    contacts_.swap(sortedContacts_);
 
     stats_.colors = colorCount_;
     stats_.serialContacts = serial;
@@ -1086,7 +1093,7 @@ void PhysicsWorld::prepareContacts(JobSystem* jobs) {
 void PhysicsWorld::solveRange(uint32_t begin, uint32_t end, bool positional, float invDt) {
     const bool angular = settings.angularContacts;
     for (uint32_t idx = begin; idx < end; ++idx) {
-        const uint32_t k = colorOrder_[idx];
+        const uint32_t k = idx;
         const Contact& c = contacts_[k];
         float imA = invMass_[c.a];
         float imB = invMass_[c.b];
@@ -1212,7 +1219,7 @@ void PhysicsWorld::solveRange(uint32_t begin, uint32_t end, bool positional, flo
 
 void PhysicsWorld::warmStart(uint32_t begin, uint32_t end) {
     for (uint32_t idx = begin; idx < end; ++idx) {
-        const uint32_t k = colorOrder_[idx];
+        const uint32_t k = idx;
         const Contact& c = contacts_[k];
         float p = normalImpulse_[k];
         if (p == 0.0f) continue;
@@ -1411,7 +1418,7 @@ void PhysicsWorld::solveBounds(size_t begin, size_t end, float invDt) {
 void PhysicsWorld::applyRestitution(uint32_t begin, uint32_t end) {
     const bool angular = settings.angularContacts;
     for (uint32_t idx = begin; idx < end; ++idx) {
-        const uint32_t k = colorOrder_[idx];
+        const uint32_t k = idx;
         if (restitutionBias_[k] <= 1e-4f || normalImpulse_[k] <= 0.0f) continue;
         const Contact& c = contacts_[k];
         float imA = invMass_[c.a], imB = invMass_[c.b];
@@ -1842,7 +1849,7 @@ size_t PhysicsWorld::bytesUsed() const {
     auto bytes = [](const auto& v) { return v.capacity() * sizeof(typename std::decay_t<decltype(v)>::value_type); };
     size_t total = bytes(angular_) + bytes(approach_) + bytes(armA_) + bytes(armB_) + bytes(asleep_) +
                    bytes(axis_) + bytes(bodyColorMask_) + bytes(bodyHi_) + bytes(bodyLo_) + bytes(cache_) +
-                   bytes(cellStart_) + bytes(colorOrder_) + bytes(colorStart_) + bytes(contactColor_) +
+                   bytes(cellStart_) + bytes(sortedContacts_) + bytes(colorStart_) + bytes(contactColor_) +
                    bytes(contactKey_) + bytes(contacts_) + bytes(deepest_) + bytes(entity_) + bytes(entries_) +
                    bytes(entryBucket_) + bytes(entryOffset_) + bytes(halfExtent_) + bytes(invInertia_) +
                    bytes(invInertiaLocal_) + bytes(invInertiaWorld_) + bytes(invMass_) + bytes(jointA_) +

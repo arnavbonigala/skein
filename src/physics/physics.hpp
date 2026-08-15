@@ -223,6 +223,9 @@ private:
     std::vector<GridEntry> entries_;
     std::vector<std::vector<Contact>> contactChunks_;
     std::vector<Contact> contacts_;
+    /// Scratch for the colour-order permutation, kept so the step does not
+    /// allocate a second contact array every frame.
+    std::vector<Contact> sortedContacts_;
     /// Everything about a contact that a substep cannot change: the arms turned
     /// to where the bodies stand now, how deep the pair is there, and the mass
     /// an impulse along the normal sees. Only velocities move between the
@@ -253,7 +256,6 @@ private:
     std::vector<uint64_t> bodyColorMask_;
     std::vector<uint32_t> contactColor_;
     std::vector<uint32_t> colorStart_;
-    std::vector<uint32_t> colorOrder_;
     uint32_t bucketMask_ = 0;
     uint32_t colorCount_ = 0;
     uint64_t frame_ = 0;
