@@ -828,7 +828,6 @@ TEST(a_turned_box_stack_stands_and_settles) {
     for (size_t i = 0; i < stack.size(); ++i) {
         float y = scene.world.get<Transform>(stack[i]).position.y;
         float want = 0.5f + static_cast<float>(i) * 1.0f;
-        if (std::abs(y - want) >= 0.2f) std::printf("   box %zu at %.3f want %.3f\n", i, y, want);
         CHECK(std::abs(y - want) < 0.2f);
         CHECK(length(scene.world.get<Velocity>(stack[i]).linear) < 0.5f);
     }
@@ -850,6 +849,27 @@ TEST(a_turned_box_comes_to_rest_flat_rather_than_propped_on_a_corner) {
     // up axis is still up.
     Vec3 up = rotate(t.rotation, Vec3{0, 1, 0});
     CHECK(up.y > 0.99f);
+}
+
+TEST(an_upright_box_rests_on_a_face_and_not_on_a_point) {
+    // Two boxes that share an axis skip the fifteen-axis test, and for a long
+    // time that path answered with a single point in the middle of the overlap.
+    // A box held up by one point is free to pivot about it, and a shove sends
+    // it over instead of sliding it along.
+    Scene scene;
+    spawnBox(scene, Vec3{0, -1, 0}, Quat{}, Vec3{20, 1, 20}, 0.0f);
+    Entity box = spawnBox(scene, Vec3{0, 0.5f, 0}, Quat{}, Vec3{0.5f, 0.5f, 0.5f});
+    PhysicsWorld physics;
+    physics.settings.useBounds = false;
+    physics.settings.allowSleep = false;
+    physics.step(scene, 1.0f / 60.0f, nullptr);
+    CHECK_EQ(physics.stats().contacts, 4u);
+
+    scene.world.get<Velocity>(box).linear = Vec3{3.0f, 0, 0};
+    for (int f = 0; f < 200; ++f) physics.step(scene, 1.0f / 60.0f, nullptr);
+    const Transform& t = scene.world.get<Transform>(box);
+    CHECK(t.position.x > 0.5f);
+    CHECK(rotate(t.rotation, Vec3{0, 1, 0}).y > 0.99f);
 }
 
 TEST(a_ray_meets_a_turned_box_where_its_face_actually_is) {
