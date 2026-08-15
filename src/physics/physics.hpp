@@ -143,6 +143,7 @@ private:
     void buildGrid(JobSystem* jobs);
     void findContacts(JobSystem* jobs);
     void colorContacts();
+    void prepareContacts(JobSystem* jobs);
     void solveRange(uint32_t begin, uint32_t end, bool positional, float invDt);
     void solveBounds(size_t begin, size_t end, float invDt);
     float boundsReach(size_t i, int axis) const;
@@ -201,6 +202,15 @@ private:
     std::vector<GridEntry> entries_;
     std::vector<std::vector<Contact>> contactChunks_;
     std::vector<Contact> contacts_;
+    /// Everything about a contact that a substep cannot change: the arms turned
+    /// to where the bodies stand now, how deep the pair is there, and the mass
+    /// an impulse along the normal sees. Only velocities move between the
+    /// iterations inside a substep, so recomputing these per iteration is two
+    /// quaternion rotations and two inertia products of wasted work.
+    std::vector<Vec3> armA_;
+    std::vector<Vec3> armB_;
+    std::vector<float> normalMass_;
+    std::vector<float> liveDepth_;
     std::vector<float> normalImpulse_;
     std::vector<Vec3> tangentImpulse_;
     std::vector<float> deepest_;

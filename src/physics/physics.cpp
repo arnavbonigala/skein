@@ -917,6 +917,51 @@ void PhysicsWorld::colorContacts() {
     stats_.serialContacts = serial;
 }
 
+void PhysicsWorld::prepareContacts(JobSystem* jobs) {
+    SKEIN_PROFILE("physics/prepare");
+    const size_t n = contacts_.size();
+    armA_.resize(n);
+    armB_.resize(n);
+    normalMass_.resize(n);
+    liveDepth_.resize(n);
+    const bool angular = settings.angularContacts;
+    auto body = [&](size_t begin, size_t end) {
+        for (size_t k = begin; k < end; ++k) {
+            const Contact& c = contacts_[k];
+            // Where the touching point is now: the arm the narrowphase
+            // measured, turned by however far the body has turned since. A
+            // stack settles by rotating a few degrees, and an arm left pointing
+            // where the pair used to touch resolves the wrong constraint by
+            // exactly that much.
+            const Vec3 rA = rotate(spinDelta_[c.a], c.anchorA);
+            const Vec3 rB = rotate(spinDelta_[c.b], c.anchorB);
+            armA_[k] = rA;
+            armB_[k] = rB;
+            // How deep the pair is *now*, not when the narrowphase looked: the
+            // bodies have been moving between substeps, and a constraint that
+            // keeps answering with the depth it was born with is solving last
+            // position's problem.
+            liveDepth_[k] = c.depth - dot((position_[c.b] + rB) - (position_[c.a] + rA), c.normal);
+            float m = invMass_[c.a] + invMass_[c.b];
+            if (angular) {
+                if (invInertia_[c.a] > 0.0f) {
+                    const Vec3 ca = cross(rA, c.normal);
+                    m += dot(ca, spin(c.a, ca));
+                }
+                if (invInertia_[c.b] > 0.0f) {
+                    const Vec3 cb = cross(rB, c.normal);
+                    m += dot(cb, spin(c.b, cb));
+                }
+            }
+            normalMass_[k] = m;
+        }
+    };
+    if (jobs && n >= 8192)
+        jobs->parallelFor(n, 4096, body);
+    else
+        body(0, n);
+}
+
 void PhysicsWorld::solveRange(uint32_t begin, uint32_t end, bool positional, float invDt) {
     const float friction = settings.friction;
     const bool angular = settings.angularContacts;
@@ -929,14 +974,8 @@ void PhysicsWorld::solveRange(uint32_t begin, uint32_t end, bool positional, flo
         if (imSum <= 0.0f) continue;
         const float iiA = angular ? invInertia_[c.a] : 0.0f;
         const float iiB = angular ? invInertia_[c.b] : 0.0f;
-        // Where the touching point is now: the arm the narrowphase measured,
-        // turned by however far the body has turned since. A stack settles by
-        // rotating a few degrees, and an arm left pointing where the pair used
-        // to touch resolves the wrong constraint by exactly that much.
-        const Vec3 armA = rotate(spinDelta_[c.a], c.anchorA);
-        const Vec3 armB = rotate(spinDelta_[c.b], c.anchorB);
-        const Vec3 rA = angular ? armA : Vec3{0, 0, 0};
-        const Vec3 rB = angular ? armB : Vec3{0, 0, 0};
+        const Vec3 rA = angular ? armA_[k] : Vec3{0, 0, 0};
+        const Vec3 rB = angular ? armB_[k] : Vec3{0, 0, 0};
         // Velocity of the touching points, not of the centres: an impulse at
         // arm's length is what turns a glancing hit into a spin.
         auto pointVel = [&](uint32_t body, const Vec3& r, float ii) {
@@ -957,12 +996,8 @@ void PhysicsWorld::solveRange(uint32_t begin, uint32_t end, bool positional, flo
         };
         Vec3 rel = pointVel(c.b, rB, iiB) - pointVel(c.a, rA, iiA);
         float vn = dot(rel, c.normal);
-        const float normalMass = angular ? effMass(c.normal) : imSum;
-        // How deep the pair is *now*, not when the narrowphase looked: the
-        // bodies have been moving between substeps, and a constraint that keeps
-        // answering with the depth it was born with is solving last position's
-        // problem.
-        const float depth = c.depth - dot((position_[c.b] + armB) - (position_[c.a] + armA), c.normal);
+        const float normalMass = angular ? normalMass_[k] : imSum;
+        const float depth = liveDepth_[k];
 
         // A contact across a gap does not forbid approach, it bounds it: the
         // pair may close exactly the distance between them and no more, which
@@ -1327,6 +1362,9 @@ void PhysicsWorld::resolve(float dt, JobSystem* jobs) {
             pass(0, position_.size());
     };
     for (int sub = 0; sub < substeps; ++sub) {
+      // Nothing a solver iteration does moves a body, so the geometry of every
+      // contact is fixed for the whole substep and is worth deriving once.
+      prepareContacts(jobs);
       integrateVelocities(h, jobs);
       for (int iter = 0; iter < std::max(1, settings.solverIterations); ++iter) {
         const bool positional = true;
