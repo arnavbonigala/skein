@@ -3,7 +3,7 @@
 #include <cstring>
 #include <fstream>
 #include <sstream>
-#include <unordered_map>
+#include <vector>
 
 #include "assets/mesh.hpp"
 
@@ -15,13 +15,60 @@ struct Ref {
     bool operator==(const Ref& o) const { return v == o.v && t == o.t && n == o.n; }
 };
 
-struct RefHash {
-    size_t operator()(const Ref& r) const {
-        size_t h = static_cast<size_t>(r.v) * 73856093u;
-        h ^= static_cast<size_t>(r.t) * 19349663u;
-        h ^= static_cast<size_t>(r.n) * 83492791u;
-        return h;
+uint32_t refHash(const Ref& r) {
+    uint32_t h = static_cast<uint32_t>(r.v) * 73856093u;
+    h ^= static_cast<uint32_t>(r.t) * 19349663u;
+    h ^= static_cast<uint32_t>(r.n) * 83492791u;
+    return h;
+}
+
+/// Open-addressed weld table. One lookup per face corner is the parser's
+/// hottest operation, and a node per corner in a std::unordered_map costs more
+/// in allocation and pointer chasing than the whole rest of the parse.
+/// A `v` of 0 is not a legal OBJ index, so it marks a free slot.
+class WeldTable {
+public:
+    WeldTable() : slots_(1024) {}
+
+    /// Returns the welded vertex index, or inserts `next` and returns it.
+    uint32_t insert(const Ref& r, uint32_t next, bool& inserted) {
+        uint32_t mask = static_cast<uint32_t>(slots_.size()) - 1;
+        for (uint32_t i = refHash(r) & mask;; i = (i + 1) & mask) {
+            Slot& slot = slots_[i];
+            if (slot.ref.v == 0) {
+                slot.ref = r;
+                slot.index = next;
+                inserted = true;
+                if (++used_ * 10 > slots_.size() * 7) grow();
+                return next;
+            }
+            if (slot.ref == r) {
+                inserted = false;
+                return slot.index;
+            }
+        }
     }
+
+private:
+    struct Slot {
+        Ref ref;
+        uint32_t index = 0;
+    };
+
+    void grow() {
+        std::vector<Slot> bigger(slots_.size() * 2);
+        uint32_t mask = static_cast<uint32_t>(bigger.size()) - 1;
+        for (const Slot& slot : slots_) {
+            if (slot.ref.v == 0) continue;
+            uint32_t i = refHash(slot.ref) & mask;
+            while (bigger[i].ref.v != 0) i = (i + 1) & mask;
+            bigger[i] = slot;
+        }
+        slots_.swap(bigger);
+    }
+
+    std::vector<Slot> slots_;
+    size_t used_ = 0;
 };
 
 /// Resolves an OBJ index, which is 1-based and may be negative (relative to end).
@@ -68,7 +115,7 @@ bool parseObj(const std::string& text, MeshData& out, std::string& error) {
     std::vector<Vec3> positions;
     std::vector<Vec3> normals;
     std::vector<Vec2> uvs;
-    std::unordered_map<Ref, uint32_t, RefHash> lookup;
+    WeldTable lookup;
 
     out.vertices.clear();
     out.indices.clear();
@@ -141,9 +188,10 @@ bool parseObj(const std::string& text, MeshData& out, std::string& error) {
                 const char* after = parseRef(q, lineEnd, ref);
                 if (after == q) break;
                 q = after;
-                auto it = lookup.find(ref);
-                if (it != lookup.end()) {
-                    face.push_back(it->second);
+                bool fresh = false;
+                uint32_t idx = lookup.insert(ref, static_cast<uint32_t>(out.vertices.size()), fresh);
+                if (!fresh) {
+                    face.push_back(idx);
                     continue;
                 }
                 size_t pi = 0;
@@ -160,9 +208,7 @@ bool parseObj(const std::string& text, MeshData& out, std::string& error) {
                 }
                 size_t ti = 0;
                 if (ref.t != 0 && resolve(ref.t, uvs.size(), ti)) vtx.uv = uvs[ti];
-                uint32_t idx = static_cast<uint32_t>(out.vertices.size());
                 out.vertices.push_back(vtx);
-                lookup.emplace(ref, idx);
                 face.push_back(idx);
             }
             if (face.size() < 3) {
