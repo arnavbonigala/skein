@@ -15,6 +15,13 @@ endif()
 
 project(skein CXX)
 
+if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
+  set(SKEIN_TOP_LEVEL ON)
+else()
+  set(SKEIN_TOP_LEVEL OFF)
+endif()
+option(SKEIN_BUILD_TOOLS "Build the demo, benchmark and tests" ${SKEIN_TOP_LEVEL})
+
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
@@ -45,13 +52,10 @@ add_library(skein STATIC
   src/script/lua_bindings.cpp
 )
 target_include_directories(skein PUBLIC src ${LUA_INCLUDE_DIR})
+target_compile_features(skein PUBLIC cxx_std_20)
 target_link_libraries(skein PUBLIC ${LUA_LIBRARY})
 find_package(Threads REQUIRED)
 target_link_libraries(skein PUBLIC Threads::Threads)
-
-add_library(skein_app STATIC src/app/demo_scene.cpp src/app/camera.cpp)
-target_link_libraries(skein_app PUBLIC skein)
-target_compile_definitions(skein_app PUBLIC SKEIN_ASSET_DIR="${CMAKE_CURRENT_SOURCE_DIR}/assets")
 
 find_package(glfw3 QUIET)
 if(glfw3_FOUND)
@@ -62,11 +66,21 @@ if(glfw3_FOUND)
     src/render/renderer.cpp
     src/render/debug_draw.cpp
   )
-  target_link_libraries(skein_gl PUBLIC skein_app glfw ${SKEIN_OPENGL})
+  target_link_libraries(skein_gl PUBLIC skein glfw ${SKEIN_OPENGL})
   target_compile_definitions(skein_gl PUBLIC GL_SILENCE_DEPRECATION)
+endif()
 
+if(NOT SKEIN_BUILD_TOOLS)
+  return()
+endif()
+
+add_library(skein_app STATIC src/app/demo_scene.cpp src/app/camera.cpp)
+target_link_libraries(skein_app PUBLIC skein)
+target_compile_definitions(skein_app PUBLIC SKEIN_ASSET_DIR="${CMAKE_CURRENT_SOURCE_DIR}/assets")
+
+if(TARGET skein_gl)
   add_executable(skein_demo src/app/main.cpp)
-  target_link_libraries(skein_demo PRIVATE skein_gl)
+  target_link_libraries(skein_demo PRIVATE skein_gl skein_app)
 else()
   message(STATUS "glfw3 not found; skipping the interactive skein_demo target")
 endif()

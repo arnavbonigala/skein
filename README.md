@@ -55,6 +55,17 @@ cmake --build build -j
 ./build/skein_demo --capture 200   # render-path sweep instead of a window
 ```
 
+### As a dependency
+
+```cmake
+add_subdirectory(path/to/skein skein)
+target_link_libraries(game PRIVATE skein_gl)
+```
+
+`skein` is the engine without a window: ECS, jobs, physics, assets, scenes and
+Lua. `skein_gl` adds the OpenGL renderer and GLFW. The demo, benchmark and tests
+only build when Skein is the top-level project, or with `-DSKEIN_BUILD_TOOLS=ON`.
+
 ## Headline numbers
 
 | | |
