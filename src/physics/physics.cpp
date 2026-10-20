@@ -287,6 +287,44 @@ bool satBoxes(const Vec3& ca, const Vec3* axa, const Vec3& ha, const Vec3& cb, c
     return true;
 }
 
+float closestOnSegment(const Vec3& p, const Vec3& a, const Vec3& b) {
+    const Vec3 ab = b - a;
+    const float l2 = length2(ab);
+    if (l2 < 1e-12f) return 0.0f;
+    return std::clamp(dot(p - a, ab) / l2, 0.0f, 1.0f);
+}
+
+void closestSegmentSegment(const Vec3& p1, const Vec3& q1, const Vec3& p2, const Vec3& q2, float& s, float& t) {
+    const Vec3 d1 = q1 - p1, d2 = q2 - p2, r = p1 - p2;
+    const float a = dot(d1, d1), e = dot(d2, d2), f = dot(d2, r);
+    if (a <= 1e-12f && e <= 1e-12f) {
+        s = t = 0.0f;
+        return;
+    }
+    if (a <= 1e-12f) {
+        s = 0.0f;
+        t = std::clamp(f / e, 0.0f, 1.0f);
+        return;
+    }
+    const float c = dot(d1, r);
+    if (e <= 1e-12f) {
+        t = 0.0f;
+        s = std::clamp(-c / a, 0.0f, 1.0f);
+        return;
+    }
+    const float b = dot(d1, d2);
+    const float denom = a * e - b * b;
+    s = denom > 1e-12f ? std::clamp((b * f - c * e) / denom, 0.0f, 1.0f) : 0.0f;
+    t = (b * s + f) / e;
+    if (t < 0.0f) {
+        t = 0.0f;
+        s = std::clamp(-c / a, 0.0f, 1.0f);
+    } else if (t > 1.0f) {
+        t = 1.0f;
+        s = std::clamp((b - c) / a, 0.0f, 1.0f);
+    }
+}
+
 uint32_t nextPow2(uint32_t v) {
     uint32_t p = 1;
     while (p < v) p <<= 1;
@@ -315,6 +353,7 @@ void PhysicsWorld::gather(Scene& scene) {
     rotated_.resize(n);
     halfExtent_.resize(n);
     radius_.resize(n);
+    segment_.resize(n);
     restitution_.resize(n);
     friction_.resize(n);
     kind_.resize(n);
@@ -356,8 +395,10 @@ void PhysicsWorld::gather(Scene& scene) {
             axis_[m * 3 + 1] = rotate(t->rotation, Vec3{0, 1, 0});
             axis_[m * 3 + 2] = rotate(t->rotation, Vec3{0, 0, 1});
         }
-        halfExtent_[m] = c.halfExtents * s;
+        const bool capsule = c.kind == static_cast<uint32_t>(ColliderKind::Capsule);
+        halfExtent_[m] = capsule ? Vec3{c.radius, c.radius + c.halfExtents.y, c.radius} * s : c.halfExtents * s;
         radius_[m] = c.radius * s;
+        segment_[m] = capsule ? rotate(t->rotation, Vec3{0, c.halfExtents.y * s, 0}) : Vec3{0, 0, 0};
         body_[m].invMass = c.invMass;
         restitution_[m] = c.restitution;
         friction_[m] = c.friction;
@@ -372,7 +413,8 @@ void PhysicsWorld::gather(Scene& scene) {
         bool asleep = settings.allowSleep && c.asleep != 0 && length2(linear) <= sleepSpeed2;
         asleep_[m] = asleep ? uint8_t{1} : uint8_t{0};
         float reach = c.kind == static_cast<uint32_t>(ColliderKind::Sphere) ? c.radius * s
-                                                                           : length(c.halfExtents * s);
+                      : capsule                                             ? (c.radius + c.halfExtents.y) * s
+                                                                            : length(c.halfExtents * s);
         reach_[m] = reach;
         // The real inertia of the shape, about its own axes. A slab is far
         // easier to spin about its long axis than to tumble end over end, and a
@@ -383,6 +425,14 @@ void PhysicsWorld::gather(Scene& scene) {
             if (c.kind == static_cast<uint32_t>(ColliderKind::Sphere)) {
                 const float r = c.radius * s;
                 li = Vec3{1, 1, 1} * (c.invMass * 2.5f / (r * r));
+            } else if (capsule) {
+                const float r = c.radius * s, h = c.halfExtents.y * s;
+                const float cylinder = 2.0f * h, ball = 4.0f / 3.0f * r;
+                const float mass = 1.0f / c.invMass;
+                const float mc = mass * cylinder / (cylinder + ball), ms = mass - mc;
+                const float axial = mc * r * r * 0.5f + ms * r * r * 0.4f;
+                const float across = mc * (h * h / 3.0f + r * r * 0.25f) + ms * (r * r * 0.4f + h * h + 0.75f * h * r);
+                li = Vec3{1.0f / std::max(across, 1e-8f), 1.0f / std::max(axial, 1e-8f), 1.0f / std::max(across, 1e-8f)};
             } else {
                 const Vec3 h = c.halfExtents * s;
                 const Vec3 h2{h.x * h.x, h.y * h.y, h.z * h.z};
@@ -400,7 +450,7 @@ void PhysicsWorld::gather(Scene& scene) {
         // Tunneling is bounded by the thinnest dimension in the world, not by
         // the bounding radius: a wide floor slab is easy to shoot through
         // exactly where it is thin.
-        float thin = c.kind == static_cast<uint32_t>(ColliderKind::Sphere)
+        float thin = c.kind != static_cast<uint32_t>(ColliderKind::Box)
                          ? radius_[m]
                          : minComponent(halfExtent_[m]);
         if (thin > 0.0f) minThin_ = minThin_ == 0.0f ? thin : std::min(minThin_, thin);
@@ -417,6 +467,7 @@ void PhysicsWorld::gather(Scene& scene) {
         rotated_.resize(m);
         halfExtent_.resize(m);
         radius_.resize(m);
+        segment_.resize(m);
         restitution_.resize(m);
         friction_.resize(m);
         kind_.resize(m);
@@ -772,7 +823,134 @@ void PhysicsWorld::findContacts(JobSystem* jobs) {
     // Returns how many contact points the pair produced: one for anything
     // curved, up to four where two box faces meet, since a single point cannot
     // stop a flat face from rocking about it.
+    auto sphereBox = [&](const Vec3& center, float r, size_t b, float margin, Vec3& nrm, float& depth,
+                         Vec3& contactPoint) -> bool {
+        const bool turned = rotated_[b] != 0;
+        const Quat inv = turned ? conjugate(orientation_[b]) : Quat{};
+        Vec3 rel = center - position_[b];
+        if (turned) rel = rotate(inv, rel);
+        Vec3 clamped{std::clamp(rel.x, -halfExtent_[b].x, halfExtent_[b].x),
+                     std::clamp(rel.y, -halfExtent_[b].y, halfExtent_[b].y),
+                     std::clamp(rel.z, -halfExtent_[b].z, halfExtent_[b].z)};
+        Vec3 delta = rel - clamped;
+        float dist2 = length2(delta);
+        float reach = r + margin;
+        if (dist2 >= reach * reach) return false;
+        if (dist2 < 1e-12f) {
+            Vec3 slack = halfExtent_[b] - vabs(rel);
+            int axis = slack.x < slack.y ? (slack.x < slack.z ? 0 : 2) : (slack.y < slack.z ? 1 : 2);
+            nrm = Vec3{0, 0, 0};
+            nrm[axis] = rel[axis] < 0 ? -1.0f : 1.0f;
+            depth = r + slack[axis];
+        } else {
+            float dist = std::sqrt(dist2);
+            nrm = delta / dist;
+            depth = r - dist;
+        }
+        contactPoint = position_[b] + (turned ? rotate(orientation_[b], clamped) : clamped);
+        if (turned) nrm = rotate(orientation_[b], nrm);
+        return true;
+    };
+
+    auto narrowCapsule = [&](size_t i, size_t j, Contact* manifold, float margin) -> int {
+        const Contact seed = manifold[0];
+        const bool boxA = kind_[i] == static_cast<uint32_t>(ColliderKind::Box);
+        const bool boxB = kind_[j] == static_cast<uint32_t>(ColliderKind::Box);
+        if (boxA || boxB) {
+            const size_t c = boxA ? j : i, b = boxA ? i : j;
+            const Vec3 p0 = position_[c] - segment_[c], p1 = position_[c] + segment_[c];
+            const bool turned = rotated_[b] != 0;
+            const Quat inv = turned ? conjugate(orientation_[b]) : Quat{};
+            const Vec3 l0 = turned ? rotate(inv, p0 - position_[b]) : p0 - position_[b];
+            const Vec3 l1 = turned ? rotate(inv, p1 - position_[b]) : p1 - position_[b];
+            const Vec3 h = halfExtent_[b];
+            auto gap = [&](float t) {
+                const Vec3 q = vabs(l0 + (l1 - l0) * t) - h;
+                return length(vmax(q, Vec3{0, 0, 0})) + std::min(maxComponent(q), 0.0f);
+            };
+            float lo = 0.0f, hi = 1.0f;
+            const float golden = 0.6180339887f;
+            float x1 = hi - golden * (hi - lo), x2 = lo + golden * (hi - lo);
+            float f1 = gap(x1), f2 = gap(x2);
+            for (int k = 0; k < 24; ++k) {
+                if (f1 <= f2) {
+                    hi = x2;
+                    x2 = x1;
+                    f2 = f1;
+                    x1 = hi - golden * (hi - lo);
+                    f1 = gap(x1);
+                } else {
+                    lo = x1;
+                    x1 = x2;
+                    f1 = f2;
+                    x2 = lo + golden * (hi - lo);
+                    f2 = gap(x2);
+                }
+            }
+            const float mid = 0.5f * (lo + hi);
+            const float samples[3] = {0.0f, 1.0f, mid};
+            int count = 0;
+            for (int k = 0; k < 3; ++k) {
+                if (k == 2 && (mid < 0.02f || mid > 0.98f)) continue;
+                Vec3 nrm, point;
+                float depth;
+                if (!sphereBox(p0 + (p1 - p0) * samples[k], radius_[c], b, margin, nrm, depth, point)) continue;
+                Contact& m = manifold[count++];
+                m = seed;
+                m.normal = boxA ? nrm : -nrm;
+                m.depth = depth;
+                m.anchorA = point;
+                m.id = static_cast<uint32_t>(k + 1);
+            }
+            return count;
+        }
+        const Vec3 a0 = position_[i] - segment_[i], a1 = position_[i] + segment_[i];
+        const Vec3 b0 = position_[j] - segment_[j], b1 = position_[j] + segment_[j];
+        const float rsum = radius_[i] + radius_[j];
+        const float reach = rsum + margin;
+        auto emit = [&](float sa, float tb, uint32_t id, Contact& m) -> bool {
+            const Vec3 ca = a0 + (a1 - a0) * sa, cb = b0 + (b1 - b0) * tb;
+            const Vec3 d = cb - ca;
+            const float d2 = length2(d);
+            if (d2 >= reach * reach) return false;
+            Vec3 n;
+            float dist = 0.0f;
+            if (d2 < 1e-12f) {
+                Vec3 centres = position_[j] - position_[i];
+                n = length2(centres) > 1e-12f ? normalize(centres) : Vec3{0, 1, 0};
+            } else {
+                dist = std::sqrt(d2);
+                n = d / dist;
+            }
+            m = seed;
+            m.normal = n;
+            m.depth = rsum - dist;
+            m.anchorA = ca + n * (radius_[i] - 0.5f * m.depth);
+            m.id = id;
+            return true;
+        };
+        const Vec3 u = a1 - a0, v = b1 - b0;
+        const float uu = length2(u), vv = length2(v);
+        if (uu > 1e-12f && vv > 1e-12f && length2(cross(u, v)) < 0.01f * uu * vv) {
+            const float t0 = dot(b0 - a0, u) / uu, t1 = dot(b1 - a0, u) / uu;
+            const float lo = std::clamp(std::min(t0, t1), 0.0f, 1.0f), hi = std::clamp(std::max(t0, t1), 0.0f, 1.0f);
+            if ((hi - lo) * std::sqrt(uu) > 4.0f * kSlop) {
+                int count = 0;
+                for (int k = 0; k < 2; ++k) {
+                    const float sa = k == 0 ? lo : hi;
+                    const float tb = closestOnSegment(a0 + u * sa, b0, b1);
+                    if (emit(sa, tb, static_cast<uint32_t>(k + 1), manifold[count])) ++count;
+                }
+                return count;
+            }
+        }
+        float sa, tb;
+        closestSegmentSegment(a0, a1, b0, b1, sa, tb);
+        return emit(sa, tb, 1u, manifold[0]) ? 1 : 0;
+    };
+
     auto narrowAll = [&](size_t i, size_t j, Contact* manifold, float margin) -> int {
+        if (kind_[i] == static_cast<uint32_t>(ColliderKind::Capsule) || kind_[j] == static_cast<uint32_t>(ColliderKind::Capsule)) return narrowCapsule(i, j, manifold, margin);
         Contact& out = manifold[0];
         bool boxA = kind_[i] == static_cast<uint32_t>(ColliderKind::Box);
         bool boxB = kind_[j] == static_cast<uint32_t>(ColliderKind::Box);
@@ -868,40 +1046,10 @@ void PhysicsWorld::findContacts(JobSystem* jobs) {
         }
         size_t s = boxA ? j : i;
         size_t b = boxA ? i : j;
-        // A turned box is met in its own frame: the clamp is the same test,
-        // and the point and normal are rotated back out at the end.
-        const bool turned = rotated_[b] != 0;
-        const Quat inv = turned ? conjugate(orientation_[b]) : Quat{};
-        Vec3 rel = position_[s] - position_[b];
-        if (turned) rel = rotate(inv, rel);
-        Vec3 clamped{std::clamp(rel.x, -halfExtent_[b].x, halfExtent_[b].x),
-                     std::clamp(rel.y, -halfExtent_[b].y, halfExtent_[b].y),
-                     std::clamp(rel.z, -halfExtent_[b].z, halfExtent_[b].z)};
-        Vec3 delta = rel - clamped;
-        float dist2 = length2(delta);
-        float r = radius_[s];
-        float reach = r + margin;
-        if (dist2 >= reach * reach) return 0;
-        Vec3 nrm;
+        Vec3 nrm, contactPoint;
         float depth;
-        if (dist2 < 1e-12f) {
-            Vec3 slack = halfExtent_[b] - vabs(rel);
-            int axis = slack.x < slack.y ? (slack.x < slack.z ? 0 : 2) : (slack.y < slack.z ? 1 : 2);
-            nrm = Vec3{0, 0, 0};
-            nrm[axis] = rel[axis] < 0 ? -1.0f : 1.0f;
-            depth = r + slack[axis];
-        } else {
-            float dist = std::sqrt(dist2);
-            nrm = delta / dist;
-            depth = r - dist;
-        }
-        Vec3 contactPoint = position_[b] + (turned ? rotate(orientation_[b], clamped) : clamped);
-        if (turned) nrm = rotate(orientation_[b], nrm);
-        if (boxA) {
-            out.normal = nrm;
-        } else {
-            out.normal = -nrm;
-        }
+        if (!sphereBox(position_[s], radius_[s], b, margin, nrm, depth, contactPoint)) return 0;
+        out.normal = boxA ? nrm : -nrm;
         out.depth = depth;
         out.anchorA = contactPoint;
         return 1;
@@ -1220,8 +1368,8 @@ void PhysicsWorld::solveRange(uint32_t begin, uint32_t end, bool positional, flo
         // sliding friction never reaches it, while a box face is already held
         // by four points that friction can act at. Spending it on a box face
         // torques the stack instead of settling it.
-        const bool curved = kind_[c.a] == static_cast<uint32_t>(ColliderKind::Sphere) ||
-                            kind_[c.b] == static_cast<uint32_t>(ColliderKind::Sphere);
+        const bool curved = kind_[c.a] != static_cast<uint32_t>(ColliderKind::Box) ||
+                            kind_[c.b] != static_cast<uint32_t>(ColliderKind::Box);
         if (angular && curved && total > 0.0f) {
             Vec3 spin = body_[c.b].w - body_[c.a].w;
             float wl = length(spin);
@@ -1401,6 +1549,7 @@ void PhysicsWorld::storeCachedImpulses(JobSystem* jobs) {
 /// leaves it permanently buried in the floor.
 float PhysicsWorld::boundsReach(size_t i, int axis) const {
     if (kind_[i] == static_cast<uint32_t>(ColliderKind::Sphere)) return radius_[i];
+    if (kind_[i] == static_cast<uint32_t>(ColliderKind::Capsule)) return radius_[i] + std::abs(segment_[i][axis]);
     if (!rotated_[i]) return halfExtent_[i][axis];
     const Vec3* ax = &axis_[i * 3];
     return std::abs(ax[0][axis]) * halfExtent_[i].x + std::abs(ax[1][axis]) * halfExtent_[i].y +
@@ -1775,6 +1924,32 @@ float raySphere(const Vec3& origin, const Vec3& dir, const Vec3& center, float r
 }
 
 /// Slab test. Fills `normal` with the face the ray enters through.
+float rayCapsule(const Vec3& origin, const Vec3& dir, const Vec3& pa, const Vec3& pb, float radius) {
+    const Vec3 ba = pb - pa;
+    const Vec3 inside = pa + ba * closestOnSegment(origin, pa, pb);
+    if (length2(origin - inside) <= radius * radius) return 0.0f;
+    const float baba = dot(ba, ba);
+    if (baba > 1e-12f) {
+        const Vec3 oa = origin - pa;
+        const float bard = dot(ba, dir), baoa = dot(ba, oa);
+        const float a = baba - bard * bard;
+        if (a > 1e-9f * baba) {
+            const float b = baba * dot(dir, oa) - baoa * bard;
+            const float c = baba * dot(oa, oa) - baoa * baoa - radius * radius * baba;
+            const float h = b * b - a * c;
+            if (h < 0.0f) return -1.0f;
+            const float t = (-b - std::sqrt(h)) / a;
+            const float y = baoa + t * bard;
+            if (y > 0.0f && y < baba) return t >= 0.0f ? t : -1.0f;
+        }
+    }
+    const float t0 = raySphere(origin, dir, pa, radius);
+    const float t1 = raySphere(origin, dir, pb, radius);
+    if (t0 < 0.0f) return t1;
+    if (t1 < 0.0f) return t0;
+    return std::min(t0, t1);
+}
+
 float rayBox(const Vec3& origin, const Vec3& dir, const Vec3& center, const Vec3& half, Vec3& normal) {
     float tMin = 0.0f, tMax = std::numeric_limits<float>::max();
     int axis = 0;
@@ -1813,6 +1988,14 @@ float PhysicsWorld::rayBody(uint32_t b, const Vec3& origin, const Vec3& d, Vec3&
     if (kind_[b] == static_cast<uint32_t>(ColliderKind::Sphere)) {
         t = raySphere(origin, d, position_[b], radius_[b]);
         if (t >= 0.0f) normal = normalize(origin + d * t - position_[b]);
+    } else if (kind_[b] == static_cast<uint32_t>(ColliderKind::Capsule)) {
+        const Vec3 pa = position_[b] - segment_[b], pb = position_[b] + segment_[b];
+        t = rayCapsule(origin, d, pa, pb, radius_[b]);
+        if (t >= 0.0f) {
+            const Vec3 hit = origin + d * t;
+            const Vec3 axis = pa + (pb - pa) * closestOnSegment(hit, pa, pb);
+            normal = length2(hit - axis) > 1e-12f ? normalize(hit - axis) : -d;
+        }
     } else if (rotated_[b]) {
         const Quat inv = conjugate(orientation_[b]);
         t = rayBox(rotate(inv, origin - position_[b]), rotate(inv, d), Vec3{0, 0, 0}, halfExtent_[b], normal);
@@ -1824,9 +2007,11 @@ float PhysicsWorld::rayBody(uint32_t b, const Vec3& origin, const Vec3& d, Vec3&
 }
 
 bool PhysicsWorld::sphereTouchesBody(uint32_t b, const Vec3& center, float radius) const {
-    if (kind_[b] == static_cast<uint32_t>(ColliderKind::Sphere)) {
+    if (kind_[b] != static_cast<uint32_t>(ColliderKind::Box)) {
+        const Vec3 pa = position_[b] - segment_[b], pb = position_[b] + segment_[b];
+        const Vec3 nearest = pa + (pb - pa) * closestOnSegment(center, pa, pb);
         float sum = radius + radius_[b];
-        return length2(position_[b] - center) < sum * sum;
+        return length2(nearest - center) < sum * sum;
     }
     Vec3 d = center - position_[b];
     if (rotated_[b]) d = rotate(conjugate(orientation_[b]), d);

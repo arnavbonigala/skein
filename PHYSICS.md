@@ -92,6 +92,16 @@ grid.
 | Sphere / box | closest point on the box, one contact |
 | Box / box, axis-aligned | overlap rectangle corners — cheap path |
 | Box / box, turned | 15-axis SAT, least-overlap axis, Sutherland-Hodgman clip |
+| Capsule / sphere or capsule | closest points between the two segments; two points when the capsules lie parallel |
+| Capsule / box | each end cap and the segment point nearest the box, each tested as a sphere |
+
+A capsule is a sphere of `radius` swept along its local y axis by
+`halfExtents.y` either way. A sphere is the same thing with no length, which is
+how one segment test covers sphere, capsule and the pair of them. Against a box,
+the nearest point along the segment comes from a golden-section search over the
+box's signed distance, which is convex along any line, so a capsule lying across
+a box edge is held where it actually touches and one lying flat is held at both
+ends.
 
 A box whose rotation is near identity takes the axis-aligned path either way, so
 `rotatedBoxes` only costs what the scene actually turns. Pairs the three world

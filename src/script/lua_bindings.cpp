@@ -111,9 +111,12 @@ int l_spawn(lua_State* L) {
             int ct = lua_gettop(L);
             Collider c;
             lua_getfield(L, ct, "kind");
-            if (lua_isstring(L, -1))
-                c.kind = std::string(lua_tostring(L, -1)) == "box" ? static_cast<uint32_t>(ColliderKind::Box)
-                                                                   : static_cast<uint32_t>(ColliderKind::Sphere);
+            if (lua_isstring(L, -1)) {
+                const std::string kind = lua_tostring(L, -1);
+                c.kind = static_cast<uint32_t>(kind == "box"       ? ColliderKind::Box
+                                               : kind == "capsule" ? ColliderKind::Capsule
+                                                                   : ColliderKind::Sphere);
+            }
             lua_pop(L, 1);
             c.radius = optNumberField(L, ct, "radius", c.radius);
             c.invMass = optNumberField(L, ct, "inv_mass", c.invMass);

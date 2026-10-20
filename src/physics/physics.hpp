@@ -215,6 +215,7 @@ private:
     std::vector<Vec3> invInertiaLocal_;
     std::vector<Vec3> halfExtent_;
     std::vector<float> radius_;
+    std::vector<Vec3> segment_;
     std::vector<float> restitution_;
     std::vector<float> friction_;
     std::vector<uint32_t> kind_;

@@ -25,7 +25,7 @@ struct Velocity {
     Vec3 angular{0, 0, 0};
 };
 
-enum class ColliderKind : uint32_t { Sphere = 0, Box = 1 };
+enum class ColliderKind : uint32_t { Sphere = 0, Box = 1, Capsule = 2 };
 
 struct Collider {
     Vec3 halfExtents{0.5f, 0.5f, 0.5f};

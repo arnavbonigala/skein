@@ -1541,3 +1541,122 @@ TEST(a_rolling_ball_slows_at_the_rate_its_rolling_resistance_predicts) {
     CHECK_NEAR(rolled(4.0f), expected, 0.12);
     CHECK_NEAR(rolled(40.0f), expected, 0.12);
 }
+
+namespace {
+
+Entity spawnCapsule(Scene& s, Vec3 pos, Quat rotation, float radius, float halfHeight, float invMass = 1.0f) {
+    Transform t;
+    t.position = pos;
+    t.rotation = rotation;
+    Entity e = s.create(t);
+    s.world.add<Velocity>(e, Velocity{});
+    Collider c;
+    c.kind = static_cast<uint32_t>(ColliderKind::Capsule);
+    c.radius = radius;
+    c.halfExtents = Vec3{0, halfHeight, 0};
+    c.invMass = invMass;
+    s.world.add<Collider>(e, c);
+    return e;
+}
+
+float capsuleTilt(Scene& s, Entity e) {
+    return std::abs(rotate(s.world.get<Transform>(e).rotation, Vec3{0, 1, 0}).y);
+}
+
+}  // namespace
+
+TEST(a_capsule_dropped_flat_rests_flat_on_two_points) {
+    Scene scene;
+    spawnStaticBox(scene, Vec3{0, 0.5f, 0}, Vec3{5, 0.5f, 5});
+    Entity cap = spawnCapsule(scene, Vec3{0, 2.0f, 0}, Quat::axisAngle(Vec3{0, 0, 1}, PI * 0.5f), 0.3f, 0.8f);
+    PhysicsWorld physics;
+    physics.settings.allowSleep = false;
+    for (int i = 0; i < 240; ++i) physics.step(scene, 1.0f / 60.0f, nullptr);
+    CHECK_NEAR(scene.world.get<Transform>(cap).position.y, 1.3, 0.02);
+    CHECK(capsuleTilt(scene, cap) < 0.02f);
+    CHECK(length(scene.world.get<Velocity>(cap).linear) < 0.02f);
+    std::vector<ContactReport> reports;
+    physics.reportContacts(reports);
+    CHECK_EQ(reports.size(), size_t{1});
+    CHECK(reports[0].points >= 2u);
+}
+
+TEST(a_tilted_capsule_topples_and_lies_down) {
+    Scene scene;
+    spawnStaticBox(scene, Vec3{0, 0.5f, 0}, Vec3{5, 0.5f, 5});
+    Entity cap = spawnCapsule(scene, Vec3{0, 2.2f, 0}, Quat::axisAngle(Vec3{1, 0, 0}, 0.35f), 0.25f, 0.7f);
+    PhysicsWorld physics;
+    physics.settings.allowSleep = false;
+    for (int i = 0; i < 360; ++i) physics.step(scene, 1.0f / 60.0f, nullptr);
+    CHECK(capsuleTilt(scene, cap) < 0.05f);
+    CHECK_NEAR(scene.world.get<Transform>(cap).position.y, 1.25, 0.03);
+}
+
+TEST(parallel_capsules_stack_on_each_other) {
+    Scene scene;
+    spawnStaticBox(scene, Vec3{0, 0.5f, 0}, Vec3{5, 0.5f, 5});
+    const Quat lying = Quat::axisAngle(Vec3{0, 0, 1}, PI * 0.5f);
+    Entity low = spawnCapsule(scene, Vec3{0, 1.3f, 0}, lying, 0.3f, 1.0f);
+    Entity high = spawnCapsule(scene, Vec3{0.1f, 2.0f, 0}, lying, 0.3f, 1.0f);
+    PhysicsWorld physics;
+    physics.settings.allowSleep = false;
+    for (int i = 0; i < 300; ++i) physics.step(scene, 1.0f / 60.0f, nullptr);
+    CHECK_NEAR(scene.world.get<Transform>(low).position.y, 1.3, 0.03);
+    CHECK(scene.world.get<Transform>(high).position.y > 1.75f);
+    CHECK(capsuleTilt(scene, high) < 0.05f);
+}
+
+TEST(a_capsule_and_a_sphere_push_each_other_apart) {
+    Scene scene;
+    Entity cap = spawnCapsule(scene, Vec3{0, 0, 0}, Quat{}, 0.4f, 1.0f);
+    Entity ball = spawnSphere(scene, Vec3{3.0f, 0.6f, 0}, Vec3{-5.0f, 0, 0}, 0.4f);
+    PhysicsWorld physics;
+    physics.settings.gravity = Vec3{0, 0, 0};
+    physics.settings.useBounds = false;
+    for (int i = 0; i < 90; ++i) physics.step(scene, 1.0f / 60.0f, nullptr);
+    const Vec3 pc = scene.world.get<Transform>(cap).position;
+    const Vec3 pb = scene.world.get<Transform>(ball).position;
+    CHECK(scene.world.get<Velocity>(cap).linear.x < -0.5f);
+    CHECK(length(Vec3{pb.x - pc.x, 0, pb.z - pc.z}) > 0.79f);
+}
+
+TEST(rays_and_overlaps_meet_a_capsule_on_its_side_and_its_caps) {
+    Scene scene;
+    Entity cap = spawnCapsule(scene, Vec3{0, 0, 0}, Quat{}, 0.5f, 1.0f, 0.0f);
+    PhysicsWorld physics;
+    physics.settings.useBounds = false;
+    physics.step(scene, 0.0f, nullptr);
+    RayHit side = physics.raycast(Vec3{-5, 0.7f, 0}, Vec3{1, 0, 0}, 20.0f);
+    CHECK(side.hit);
+    CHECK_EQ(side.entity, cap);
+    CHECK_NEAR(side.distance, 4.5, 1e-4);
+    CHECK_NEAR(side.normal.x, -1.0, 1e-4);
+    RayHit top = physics.raycast(Vec3{0, 5, 0}, Vec3{0, -1, 0}, 20.0f);
+    CHECK_NEAR(top.distance, 3.5, 1e-4);
+    CHECK_NEAR(top.normal.y, 1.0, 1e-4);
+    RayHit miss = physics.raycast(Vec3{-5, 1.9f, 0.3f}, Vec3{1, 0, 0}, 20.0f);
+    CHECK(!miss.hit);
+    std::vector<Entity> found;
+    physics.overlapSphere(Vec3{0.6f, 1.1f, 0}, 0.2f, found);
+    CHECK_EQ(found.size(), size_t{1});
+    found.clear();
+    physics.overlapSphere(Vec3{0.6f, 1.5f, 0}, 0.2f, found);
+    CHECK(found.empty());
+}
+
+TEST(a_lying_capsule_stays_inside_the_walls) {
+    Scene scene;
+    Entity cap = spawnCapsule(scene, Vec3{0, 0.5f, 0}, Quat::axisAngle(Vec3{0, 0, 1}, PI * 0.5f), 0.3f, 1.0f);
+    scene.world.get<Velocity>(cap).linear = Vec3{20.0f, 0, 0};
+    scene.world.get<Collider>(cap).fixedRotation = 1;
+    PhysicsWorld physics;
+    physics.settings.boundsMin = Vec3{-5, 0, -5};
+    physics.settings.boundsMax = Vec3{5, 10, 5};
+    float maxX = 0.0f;
+    for (int i = 0; i < 120; ++i) {
+        physics.step(scene, 1.0f / 60.0f, nullptr);
+        maxX = std::max(maxX, scene.world.get<Transform>(cap).position.x);
+    }
+    CHECK(maxX <= 5.0f - 1.3f + 1e-3f);
+    CHECK_NEAR(scene.world.get<Transform>(cap).position.y, 0.3, 0.02);
+}
