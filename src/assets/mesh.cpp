@@ -130,6 +130,78 @@ MeshData cone(float radius, float height, int segments) {
     return m;
 }
 
+MeshData capsule(float radius, float height, int segments, int rings) {
+    MeshData m;
+    m.name = "capsule";
+    segments = std::max(segments, 3);
+    int half = std::max(rings / 2, 1);
+    float offset = std::max(height * 0.5f - radius, 0.0f);
+    for (int side = 0; side < 2; ++side) {
+        for (int y = 0; y <= half; ++y) {
+            float phi = (static_cast<float>(side * half + y) / static_cast<float>(2 * half)) * PI;
+            float lift = side == 0 ? offset : -offset;
+            for (int x = 0; x <= segments; ++x) {
+                float u = static_cast<float>(x) / static_cast<float>(segments);
+                float theta = u * 2.0f * PI;
+                Vec3 n{std::sin(phi) * std::cos(theta), std::cos(phi), std::sin(phi) * std::sin(theta)};
+                Vec3 p = n * radius + Vec3{0, lift, 0};
+                m.vertices.push_back(Vertex{p, n, Vec2{u, 0.5f - p.y / std::max(height, 1e-6f)}});
+            }
+        }
+    }
+    int stride = segments + 1;
+    int rows = 2 * (half + 1);
+    for (int y = 0; y + 1 < rows; ++y) {
+        for (int x = 0; x < segments; ++x) {
+            uint32_t a = static_cast<uint32_t>(y * stride + x);
+            uint32_t b = static_cast<uint32_t>((y + 1) * stride + x);
+            uint32_t idx[6] = {a, a + 1, b, a + 1, b + 1, b};
+            m.indices.insert(m.indices.end(), idx, idx + 6);
+        }
+    }
+    m.recomputeBounds();
+    return m;
+}
+
+MeshData cylinder(float radius, float height, int segments) {
+    MeshData m;
+    m.name = "cylinder";
+    segments = std::max(segments, 3);
+    float h = height * 0.5f;
+    for (int row = 0; row < 2; ++row) {
+        for (int x = 0; x <= segments; ++x) {
+            float u = static_cast<float>(x) / static_cast<float>(segments);
+            float theta = u * 2.0f * PI;
+            Vec3 n{std::cos(theta), 0, std::sin(theta)};
+            m.vertices.push_back(Vertex{n * radius + Vec3{0, row == 0 ? h : -h, 0}, n, Vec2{u, static_cast<float>(row)}});
+        }
+    }
+    uint32_t stride = static_cast<uint32_t>(segments + 1);
+    for (uint32_t x = 0; x < static_cast<uint32_t>(segments); ++x) {
+        uint32_t a = x, b = stride + x;
+        uint32_t idx[6] = {a, a + 1, b, a + 1, b + 1, b};
+        m.indices.insert(m.indices.end(), idx, idx + 6);
+    }
+    for (int cap = 0; cap < 2; ++cap) {
+        float y = cap == 0 ? h : -h;
+        Vec3 n{0, cap == 0 ? 1.0f : -1.0f, 0};
+        uint32_t center = static_cast<uint32_t>(m.vertices.size());
+        m.vertices.push_back(Vertex{Vec3{0, y, 0}, n, Vec2{0.5f, 0.5f}});
+        for (int x = 0; x <= segments; ++x) {
+            float theta = static_cast<float>(x) / static_cast<float>(segments) * 2.0f * PI;
+            float c = std::cos(theta), s = std::sin(theta);
+            m.vertices.push_back(Vertex{Vec3{c * radius, y, s * radius}, n, Vec2{0.5f + c * 0.5f, 0.5f + s * 0.5f}});
+        }
+        for (uint32_t x = 0; x < static_cast<uint32_t>(segments); ++x) {
+            uint32_t p0 = center + 1 + x, p1 = p0 + 1;
+            uint32_t idx[3] = {center, cap == 0 ? p1 : p0, cap == 0 ? p0 : p1};
+            m.indices.insert(m.indices.end(), idx, idx + 3);
+        }
+    }
+    m.recomputeBounds();
+    return m;
+}
+
 }  // namespace primitives
 
 uint32_t Assets::addMesh(MeshData mesh) {

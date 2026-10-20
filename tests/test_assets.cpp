@@ -174,3 +174,27 @@ TEST(asset_handles_are_dense_and_reusable_by_name) {
     CHECK_EQ(assets.findMesh("missing"), ~0u);
     CHECK(assets.bytesUsed() > 0);
 }
+
+TEST(capsule_and_cylinder_are_bounded_and_wound_outward) {
+    MeshData capsule = primitives::capsule(0.4f, 1.6f, 20, 12);
+    MeshData cylinder = primitives::cylinder(0.7f, 0.3f, 18);
+    CHECK_NEAR(capsule.bounds.max.y, 0.8, 1e-4);
+    CHECK_NEAR(capsule.bounds.min.y, -0.8, 1e-4);
+    CHECK_NEAR(capsule.bounds.max.x, 0.4, 1e-4);
+    CHECK_NEAR(cylinder.bounds.max.y, 0.15, 1e-5);
+    CHECK_NEAR(cylinder.bounds.max.x, 0.7, 1e-4);
+    for (const MeshData* mesh : {&capsule, &cylinder}) {
+        size_t faces = 0;
+        for (size_t i = 0; i + 2 < mesh->indices.size(); i += 3) {
+            const Vertex& a = mesh->vertices[mesh->indices[i]];
+            const Vertex& b = mesh->vertices[mesh->indices[i + 1]];
+            const Vertex& c = mesh->vertices[mesh->indices[i + 2]];
+            Vec3 face = cross(b.position - a.position, c.position - a.position);
+            if (length(face) < 1e-6f) continue;
+            ++faces;
+            CHECK(dot(face, a.normal + b.normal + c.normal) > 0.0f);
+            CHECK(dot(face, (a.position + b.position + c.position) / 3.0f) > 0.0f);
+        }
+        CHECK(faces > 0);
+    }
+}

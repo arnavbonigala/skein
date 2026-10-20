@@ -43,6 +43,8 @@ MeshData cube(float size = 1.0f);
 MeshData sphere(float radius = 0.5f, int segments = 24, int rings = 16);
 MeshData plane(float size = 1.0f, int subdivisions = 1);
 MeshData cone(float radius = 0.5f, float height = 1.0f, int segments = 20);
+MeshData capsule(float radius = 0.5f, float height = 2.0f, int segments = 24, int rings = 16);
+MeshData cylinder(float radius = 0.5f, float height = 1.0f, int segments = 24);
 }  // namespace primitives
 
 /// Parses a Wavefront OBJ into a single mesh, merging groups and welding
