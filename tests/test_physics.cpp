@@ -1398,3 +1398,27 @@ TEST(queries_answer_the_same_with_or_without_the_grid) {
     }
     CHECK(hits > 20);
 }
+
+TEST(a_kinematic_body_keeps_its_velocity_and_shoves_what_it_meets) {
+    Scene scene;
+    Transform t;
+    t.position = Vec3{-3.0f, 0.5f, 0};
+    Entity paddle = scene.create(t);
+    scene.world.add<Velocity>(paddle, Velocity{Vec3{4.0f, 0, 0}, Vec3{0, 1.5f, 0}});
+    Collider c;
+    c.kind = static_cast<uint32_t>(ColliderKind::Box);
+    c.halfExtents = Vec3{0.5f, 0.5f, 1.5f};
+    c.invMass = 0.0f;
+    scene.world.add<Collider>(paddle, c);
+    Entity ball = spawnSphere(scene, Vec3{0, 0.5f, 0}, Vec3{0, 0, 0}, 0.5f);
+
+    PhysicsWorld physics;
+    for (int i = 0; i < 60; ++i) physics.step(scene, 1.0f / 60.0f, nullptr);
+
+    const Velocity& pv = scene.world.get<Velocity>(paddle);
+    CHECK_NEAR(pv.linear.x, 4.0, 1e-6);
+    CHECK_NEAR(pv.angular.y, 1.5, 1e-6);
+    CHECK_NEAR(scene.world.get<Transform>(paddle).position.x, 1.0, 1e-3);
+    CHECK_NEAR(scene.world.get<Transform>(paddle).position.y, 0.5, 1e-6);
+    CHECK(scene.world.get<Transform>(ball).position.x > 1.5f);
+}

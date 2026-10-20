@@ -274,6 +274,13 @@ positional correction to be as strong as it is.
 falls below it — gravity re-accelerates it every step and the contact impulse
 cancels it right back.
 
+## Kinematic bodies
+
+A collider with `invMass = 0` and a `Velocity` is kinematic. It moves and turns
+by exactly the velocity it is given, with no gravity, damping or walls, and the
+solver treats it as infinitely heavy, so what it meets gets pushed and it does
+not. Without a `Velocity` the same collider is static.
+
 ## Fixed rotation
 
 A collider with `fixedRotation` set gets zero inverse inertia, so no contact or

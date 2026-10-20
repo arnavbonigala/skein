@@ -576,8 +576,8 @@ void PhysicsWorld::integrateVelocities(float dt, JobSystem* jobs) {
     const bool angular = settings.angularContacts;
     auto body = [&](size_t begin, size_t end) {
         for (size_t i = begin; i < end; ++i) {
-            if (asleep_[i]) continue;
-            if (body_[i].invMass > 0.0f) body_[i].v += g * dt;
+            if (asleep_[i] || body_[i].invMass <= 0.0f) continue;
+            body_[i].v += g * dt;
             body_[i].v *= damp;
             if (angular) body_[i].w *= spinDamp;
         }
