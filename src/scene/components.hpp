@@ -72,8 +72,20 @@ struct Renderable {
     uint32_t mesh = 0;
     uint32_t material = 0;
     uint32_t visible = 1;
-    uint32_t pad = 0;
+    uint32_t tint = 0;
 };
+
+inline uint32_t packTint(const Vec3& rgb) {
+    auto channel = [](float v) { return static_cast<uint32_t>(std::clamp(v, 0.0f, 1.0f) * 255.0f + 0.5f); };
+    return channel(rgb.x) | channel(rgb.y) << 8 | channel(rgb.z) << 16 | 0xFF000000u;
+}
+
+inline Vec3 unpackTint(uint32_t tint) {
+    if (tint == 0) return Vec3{1, 1, 1};
+    return Vec3{static_cast<float>(tint & 0xFFu), static_cast<float>((tint >> 8) & 0xFFu),
+                static_cast<float>((tint >> 16) & 0xFFu)} *
+           (1.0f / 255.0f);
+}
 
 /// Local mesh bounds plus the world-space bounds the transform pass refreshes
 /// each frame. Keeping both in one record means culling touches a single array.

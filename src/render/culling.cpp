@@ -316,12 +316,17 @@ void CullSystem::build(Scene& scene, const Frustum& frustum, uint32_t materialCo
         for (size_t i = begin; i < end; ++i) {
             uint32_t slot = visible_[order_[i]];
             Entity e = renderables.dense[slot];
+            Mat4& m = out.instances[i];
             if (worldsAligned && worlds.dense[slot] == e) {
-                out.instances[i] = worlds.data[slot].matrix;
-                continue;
+                m = worlds.data[slot].matrix;
+            } else {
+                const WorldTransform* wt = worlds.tryGet(e);
+                m = wt ? wt->matrix : Mat4::identity();
             }
-            const WorldTransform* wt = worlds.tryGet(e);
-            out.instances[i] = wt ? wt->matrix : Mat4::identity();
+            const Vec3 tint = unpackTint(renderables.data[slot].tint);
+            m.m[0][3] = tint.x;
+            m.m[1][3] = tint.y;
+            m.m[2][3] = tint.z;
         }
     };
     if (jobs && visible_.size() >= CULL_GRAIN * 2)

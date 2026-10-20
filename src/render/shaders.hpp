@@ -17,11 +17,17 @@ out vec3 vWorldPos;
 out vec3 vNormal;
 out vec2 vUv;
 out vec4 vLightSpace;
+out vec3 vTint;
 
 void main() {
-    vec4 world = aModel * vec4(aPosition, 1.0);
+    mat4 model = aModel;
+    vTint = vec3(model[0][3], model[1][3], model[2][3]);
+    model[0][3] = 0.0;
+    model[1][3] = 0.0;
+    model[2][3] = 0.0;
+    vec4 world = model * vec4(aPosition, 1.0);
     vWorldPos = world.xyz;
-    vNormal = transpose(inverse(mat3(aModel))) * aNormal;
+    vNormal = transpose(inverse(mat3(model))) * aNormal;
     vUv = aUv;
     vLightSpace = uLightViewProj * world;
     gl_Position = uViewProj * world;
@@ -33,6 +39,7 @@ in vec3 vWorldPos;
 in vec3 vNormal;
 in vec2 vUv;
 in vec4 vLightSpace;
+in vec3 vTint;
 
 out vec4 fragColor;
 
@@ -83,12 +90,13 @@ vec3 shade(vec3 normal, vec3 view, vec3 lightDir, vec3 radiance, vec3 albedo, fl
 }
 
 void main() {
+    vec3 albedo = uAlbedo * vTint;
     vec3 normal = normalize(vNormal);
     vec3 view = normalize(uCameraPos - vWorldPos);
     float gloss = mix(128.0, 4.0, clamp(uRoughness, 0.0, 1.0));
 
     vec3 sunDir = normalize(-uSunDirection);
-    vec3 color = shade(normal, view, sunDir, uSunColor * uSunIntensity, uAlbedo, gloss) *
+    vec3 color = shade(normal, view, sunDir, uSunColor * uSunIntensity, albedo, gloss) *
                  shadowFactor(normal, sunDir);
 
     for (int i = 0; i < uPointCount; ++i) {
@@ -99,11 +107,11 @@ void main() {
         float falloff = clamp(1.0 - dist / range, 0.0, 1.0);
         falloff *= falloff;
         color += shade(normal, view, toLight / max(dist, 1e-4),
-                       uPointColor[i].rgb * uPointColor[i].a * falloff, uAlbedo, gloss);
+                       uPointColor[i].rgb * uPointColor[i].a * falloff, albedo, gloss);
     }
 
     float hemi = normal.y * 0.5 + 0.5;
-    color += uAlbedo * mix(uAmbientGround, uAmbientSky, hemi);
+    color += albedo * mix(uAmbientGround, uAmbientSky, hemi);
     color += uEmissive;
 
     float fog = 1.0 - exp(-uFogDensity * length(uCameraPos - vWorldPos));
@@ -118,7 +126,13 @@ inline const char* DEPTH_VERTEX = R"(#version 410 core
 layout(location = 0) in vec3 aPosition;
 layout(location = 3) in mat4 aModel;
 uniform mat4 uViewProj;
-void main() { gl_Position = uViewProj * aModel * vec4(aPosition, 1.0); }
+void main() {
+    mat4 model = aModel;
+    model[0][3] = 0.0;
+    model[1][3] = 0.0;
+    model[2][3] = 0.0;
+    gl_Position = uViewProj * model * vec4(aPosition, 1.0);
+}
 )";
 
 inline const char* DEPTH_FRAGMENT = R"(#version 410 core

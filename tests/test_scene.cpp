@@ -478,3 +478,32 @@ TEST(spatial_clustering_matches_the_flat_cull_and_skips_most_objects) {
     for (size_t i = 0; i < bounds.dense.size(); ++i)
         CHECK(scene.world.tryGet<CullBounds>(bounds.dense[i]) == &bounds.data[i]);
 }
+
+TEST(instance_matrices_carry_the_tint_in_their_spare_row) {
+    Scene scene;
+    Entity plain = scene.create(trs(Vec3{0, 0, -5}));
+    Entity red = scene.create(trs(Vec3{1, 0, -5}));
+    scene.world.add<Renderable>(plain, Renderable{0, 0, 1, 0});
+    scene.world.add<Renderable>(red, Renderable{0, 1, 1, packTint(Vec3{1.0f, 0.2f, 0.0f})});
+    for (Entity e : {plain, red}) {
+        CullBounds cb;
+        cb.localExtent = Vec3{0.5f, 0.5f, 0.5f};
+        scene.world.add<CullBounds>(e, cb);
+    }
+    scene.updateTransforms(nullptr);
+    CullSystem culler;
+    RenderList list;
+    culler.build(scene, extractFrustum(perspective(1.2f, 1.0f, 0.1f, 100.0f)), 2, list, nullptr);
+    CHECK_EQ(list.visible, uint32_t{2});
+    CHECK_EQ(list.batches.size(), size_t{2});
+    const Mat4& first = list.instances[list.batches[0].first];
+    const Mat4& second = list.instances[list.batches[1].first];
+    CHECK_NEAR(first.m[0][3], 1.0, 1e-6);
+    CHECK_NEAR(first.m[1][3], 1.0, 1e-6);
+    CHECK_NEAR(first.m[3][0], 0.0, 1e-6);
+    CHECK_NEAR(second.m[0][3], 1.0, 1e-6);
+    CHECK_NEAR(second.m[1][3], 51.0 / 255.0, 1e-6);
+    CHECK_NEAR(second.m[2][3], 0.0, 1e-6);
+    CHECK_NEAR(second.m[3][0], 1.0, 1e-6);
+    CHECK_NEAR(second.m[3][3], 1.0, 1e-6);
+}
