@@ -65,6 +65,7 @@ if(glfw3_FOUND)
     src/render/gpu_mesh.cpp
     src/render/renderer.cpp
     src/render/debug_draw.cpp
+    src/render/recorder.cpp
   )
   target_link_libraries(skein_gl PUBLIC skein glfw ${SKEIN_OPENGL})
   target_compile_definitions(skein_gl PUBLIC GL_SILENCE_DEPRECATION)

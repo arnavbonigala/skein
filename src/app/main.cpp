@@ -9,6 +9,7 @@
 #include "core/profiler.hpp"
 #include "render/debug_draw.hpp"
 #include "render/gl.hpp"
+#include "render/recorder.hpp"
 #include "render/renderer.hpp"
 #include "scene/serialize.hpp"
 
@@ -42,7 +43,7 @@ void printHelp() {
         "  L      shadows on or off                B      draw cull bounds\n"
         "  C      freeze the culling camera        P      dump the frame profile\n"
         "  V      vsync                            Space bar pause is O\n"
-        "  F5/F9  save or load scene.skn\n\n");
+        "  F5/F9  save or load scene.skn         --record out.mp4 to capture video\n\n");
 }
 
 void keyCallback(GLFWwindow* window, int key, int scancode, int action, int mods) {
@@ -158,6 +159,7 @@ int main(int argc, char** argv) {
     DemoConfig config;
     config.ropes = 24;
     int captureFrames = 0;
+    const char* recordPath = nullptr;
     std::string scriptPath = std::string(SKEIN_ASSET_DIR) + "/scripts/demo.lua";
     for (int i = 1; i < argc; ++i) {
         if (std::strcmp(argv[i], "--entities") == 0 && i + 1 < argc)
@@ -172,6 +174,8 @@ int main(int argc, char** argv) {
             scriptPath = argv[++i];
         else if (std::strcmp(argv[i], "--capture") == 0 && i + 1 < argc)
             captureFrames = std::atoi(argv[++i]);
+        else if (std::strcmp(argv[i], "--record") == 0 && i + 1 < argc)
+            recordPath = argv[++i];
     }
 
     if (!glfwInit()) {
@@ -300,6 +304,16 @@ int main(int argc, char** argv) {
 
     printHelp();
 
+    VideoRecorder recorder;
+    if (recordPath) {
+        int width = 0, height = 0;
+        glfwGetFramebufferSize(window, &width, &height);
+        if (recorder.open(recordPath, width, height, 60, error))
+            std::printf("recording %dx%d to %s\n", width, height, recordPath);
+        else
+            std::fprintf(stderr, "record: %s\n", error.c_str());
+    }
+
     double lastTime = glfwGetTime();
     double titleTimer = 0;
 
@@ -339,6 +353,7 @@ int main(int argc, char** argv) {
             glEnable(GL_DEPTH_TEST);
         }
 
+        recorder.capture();
         glfwSwapBuffers(window);
         Profiler::instance().endFrame();
 
@@ -360,6 +375,7 @@ int main(int argc, char** argv) {
         }
     }
 
+    recorder.close();
     std::printf("\n%s\n", Profiler::instance().report().c_str());
     glfwDestroyWindow(window);
     glfwTerminate();

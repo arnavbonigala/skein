@@ -96,6 +96,7 @@ case. Full tables, method and A/B protocol in [BENCHMARKS.md](BENCHMARKS.md).
 | **Joints** | Distance constraints solved by the same accumulated-impulse machinery as contacts, with XPBD compliance exposed as metres of stretch per newton-second. Length error routes through the split-impulse channel, not as a bias inside the carried impulse — a bias there replays last frame's correction on top of this frame's and a hanging chain climbs above its own anchor. |
 | **Assets** | Hand-written OBJ parser — all four face index forms, negative indices, fan triangulation, welding, generated normals. Walked in place rather than through `getline`/`sscanf`, welded through an open-addressed table. Batch loads parse concurrently and register deterministically. |
 | **Serialization** | Versioned binary format writing each registered pool verbatim. Entity ids, generations and holes survive a round trip; unknown or size-mismatched pools are skipped rather than fatal. |
+| **Recording** | `VideoRecorder` reads the back buffer each frame and pipes raw RGB into ffmpeg, encoded on the hardware H.264 encoder. `skein_demo --record out.mp4`. |
 | **Scripting** | Lua 5.5 through the C API, driving the same pools the C++ systems read — a scripted entity is culled, lit and simulated exactly like a native one. `skein.raycast`, `skein.overlap_sphere`, `skein.joint`/`unjoint`. A callback that errors is unbound and reported instead of killing the frame. |
 
 ## Cluster culling
