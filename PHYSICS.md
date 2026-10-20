@@ -94,6 +94,7 @@ grid.
 | Box / box, turned | 15-axis SAT, least-overlap axis, Sutherland-Hodgman clip |
 | Capsule / sphere or capsule | closest points between the two segments; two points when the capsules lie parallel |
 | Capsule / box | each end cap and the segment point nearest the box, each tested as a sphere |
+| Plane / anything | signed distance of the sphere's lowest point, both capsule end caps, or the four deepest box corners |
 
 A capsule is a sphere of `radius` swept along its local y axis by
 `halfExtents.y` either way. A sphere is the same thing with no length, which is
@@ -283,6 +284,16 @@ positional correction to be as strong as it is.
 `sleepSpeed` must sit above `gravity * dt`, or a body resting on another never
 falls below it — gravity re-accelerates it every step and the contact impulse
 cancels it right back.
+
+## Planes
+
+A `Plane` collider is an infinite, static half-space: its transform's position is
+a point on the surface and its local +y is the outward normal. Planes never enter
+the broadphase. Every plane is tested against every body directly, which is
+cheaper than registering an infinite shape in a grid and costs one dot product a
+body. Unlike the world bounds, a plane makes real contacts at real points, so a
+box knocked onto one tips onto a face and a capsule lies down. Use planes for
+floors, ramps and walls, and keep the bounds as a cheap outer fence.
 
 ## Kinematic bodies
 

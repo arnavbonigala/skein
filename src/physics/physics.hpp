@@ -178,6 +178,7 @@ private:
     void updateSleep(float dt, JobSystem* jobs);
     void scatter(Scene& scene, JobSystem* jobs);
     float rayBody(uint32_t b, const Vec3& origin, const Vec3& dir, Vec3& normal) const;
+    RayHit castBodies(const Vec3& origin, const Vec3& dir, float maxDistance, uint32_t layers) const;
     bool sphereTouchesBody(uint32_t b, const Vec3& center, float radius) const;
 
     /// Everything an impulse needs about one body, in one 64-byte record. The
@@ -216,6 +217,7 @@ private:
     std::vector<Vec3> halfExtent_;
     std::vector<float> radius_;
     std::vector<Vec3> segment_;
+    std::vector<uint32_t> planes_;
     std::vector<float> restitution_;
     std::vector<float> friction_;
     std::vector<uint32_t> kind_;

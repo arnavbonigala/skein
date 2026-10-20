@@ -364,6 +364,7 @@ void PhysicsWorld::gather(Scene& scene) {
     reach_.resize(n);
     slot_.assign(n, UINT32_MAX);
 
+    planes_.clear();
     maxReach_ = 0.0f;
     minThin_ = 0.0f;
     maxSpeed2_ = 0.0f;
@@ -396,10 +397,15 @@ void PhysicsWorld::gather(Scene& scene) {
             axis_[m * 3 + 2] = rotate(t->rotation, Vec3{0, 0, 1});
         }
         const bool capsule = c.kind == static_cast<uint32_t>(ColliderKind::Capsule);
+        const bool plane = c.kind == static_cast<uint32_t>(ColliderKind::Plane);
+        if (plane) planes_.push_back(static_cast<uint32_t>(m));
         halfExtent_[m] = capsule ? Vec3{c.radius, c.radius + c.halfExtents.y, c.radius} * s : c.halfExtents * s;
         radius_[m] = c.radius * s;
-        segment_[m] = capsule ? rotate(t->rotation, Vec3{0, c.halfExtents.y * s, 0}) : Vec3{0, 0, 0};
-        body_[m].invMass = c.invMass;
+        segment_[m] = capsule ? rotate(t->rotation, Vec3{0, c.halfExtents.y * s, 0})
+                      : plane ? rotate(t->rotation, Vec3{0, 1, 0})
+                              : Vec3{0, 0, 0};
+        if (plane) halfExtent_[m] = Vec3{0, 0, 0};
+        body_[m].invMass = plane ? 0.0f : c.invMass;
         restitution_[m] = c.restitution;
         friction_[m] = c.friction;
         kind_[m] = c.kind;
@@ -414,6 +420,7 @@ void PhysicsWorld::gather(Scene& scene) {
         asleep_[m] = asleep ? uint8_t{1} : uint8_t{0};
         float reach = c.kind == static_cast<uint32_t>(ColliderKind::Sphere) ? c.radius * s
                       : capsule                                             ? (c.radius + c.halfExtents.y) * s
+                      : plane                                               ? 0.0f
                                                                             : length(c.halfExtents * s);
         reach_[m] = reach;
         // The real inertia of the shape, about its own axes. A slab is far
@@ -421,7 +428,7 @@ void PhysicsWorld::gather(Scene& scene) {
         // single number for both cannot say so: it either spins a body up out
         // of a graze or refuses to let anything tumble.
         Vec3 li{0, 0, 0};
-        if (c.invMass > 0.0f && reach > 0.0f && !c.fixedRotation) {
+        if (c.invMass > 0.0f && reach > 0.0f && !c.fixedRotation && !plane) {
             if (c.kind == static_cast<uint32_t>(ColliderKind::Sphere)) {
                 const float r = c.radius * s;
                 li = Vec3{1, 1, 1} * (c.invMass * 2.5f / (r * r));
@@ -1068,7 +1075,74 @@ void PhysicsWorld::findContacts(JobSystem* jobs) {
         for (auto& c : sensorChunks_) c.clear();
     }
 
+    auto narrowPlane = [&](uint32_t p, uint32_t b, Contact* manifold, float margin) -> int {
+        const Vec3 n = segment_[p];
+        const float offset = dot(position_[p], n);
+        auto touch = [&](const Vec3& deepest, uint32_t id, int& count) {
+            const float gap = dot(deepest, n) - offset;
+            if (gap >= margin) return;
+            Contact& m = manifold[count++];
+            m.a = std::min(p, b);
+            m.b = std::max(p, b);
+            m.normal = p < b ? n : -n;
+            m.depth = -gap;
+            m.anchorA = deepest - n * (0.5f * gap);
+            m.id = id;
+        };
+        int count = 0;
+        if (kind_[b] == static_cast<uint32_t>(ColliderKind::Box)) {
+            static const Vec3 world[3] = {{1, 0, 0}, {0, 1, 0}, {0, 0, 1}};
+            const Vec3* ax = rotated_[b] ? &axis_[b * 3] : world;
+            const Vec3 h = halfExtent_[b];
+            Vec3 points[8];
+            float gaps[8];
+            for (uint32_t corner = 0; corner < 8; ++corner) {
+                points[corner] = position_[b] + ax[0] * (corner & 1u ? h.x : -h.x) + ax[1] * (corner & 2u ? h.y : -h.y) +
+                                 ax[2] * (corner & 4u ? h.z : -h.z);
+                gaps[corner] = dot(points[corner], n) - offset;
+            }
+            uint32_t order[8] = {0, 1, 2, 3, 4, 5, 6, 7};
+            std::stable_sort(order, order + 8, [&](uint32_t x, uint32_t y) { return gaps[x] < gaps[y]; });
+            for (int k = 0; k < 4; ++k) touch(points[order[k]], order[k] + 1u, count);
+            return count;
+        }
+        const float r = radius_[b];
+        const Vec3 e = segment_[b];
+        if (kind_[b] == static_cast<uint32_t>(ColliderKind::Capsule)) {
+            touch(position_[b] - e - n * r, 1u, count);
+            touch(position_[b] + e - n * r, 2u, count);
+            return count;
+        }
+        touch(position_[b] - n * r, 1u, count);
+        return count;
+    };
+
+    auto addPlaneContacts = [&]() {
+        if (planes_.empty()) return;
+        const uint32_t n = static_cast<uint32_t>(position_.size());
+        for (uint32_t p : planes_) {
+            for (uint32_t b = 0; b < n; ++b) {
+                if (kind_[b] == static_cast<uint32_t>(ColliderKind::Plane) || body_[b].invMass <= 0.0f) continue;
+                if (!(filter_[p].layer & filter_[b].mask) || !(filter_[b].layer & filter_[p].mask)) continue;
+                Contact manifold[4];
+                const int found = narrowPlane(p, b, manifold, motion_[b] + kManifoldSkin);
+                if (found > 0 && (sensor_[p] | sensor_[b])) {
+                    if (manifold[0].depth < 0.0f) continue;
+                    if (sensor_[p]) sensorOverlaps_.push_back(SensorOverlap{entity_[p], entity_[b]});
+                    if (sensor_[b]) sensorOverlaps_.push_back(SensorOverlap{entity_[b], entity_[p]});
+                    continue;
+                }
+                for (int m = 0; m < found; ++m) {
+                    manifold[m].anchorB = manifold[m].anchorA - position_[manifold[m].b];
+                    manifold[m].anchorA -= position_[manifold[m].a];
+                    contacts_.push_back(manifold[m]);
+                }
+            }
+        }
+    };
+
     auto consider = [&](uint32_t i, uint32_t j, std::vector<Contact>& sink, std::vector<SensorOverlap>& sensed) {
+        if (kind_[i] == static_cast<uint32_t>(ColliderKind::Plane) || kind_[j] == static_cast<uint32_t>(ColliderKind::Plane)) return;
         if (!(filter_[i].layer & filter_[j].mask) || !(filter_[j].layer & filter_[i].mask)) return;
         if (sensor_[i] | sensor_[j]) {
             Contact probe[4];
@@ -1129,6 +1203,7 @@ void PhysicsWorld::findContacts(JobSystem* jobs) {
         }
         contacts_.swap(sink);
         sink.clear();
+        addPlaneContacts();
         stats_.pairsTested = localPairs;
         stats_.nearPairs = localNear;
         stats_.duplicatePairs = 0;
@@ -1187,6 +1262,7 @@ void PhysicsWorld::findContacts(JobSystem* jobs) {
     for (auto& c : contactChunks_) contacts_.insert(contacts_.end(), c.begin(), c.end());
     sensorOverlaps_.clear();
     for (auto& c : sensorChunks_) sensorOverlaps_.insert(sensorOverlaps_.end(), c.begin(), c.end());
+    addPlaneContacts();
     stats_.pairsTested = pairs.load();
     stats_.nearPairs = near.load();
     stats_.duplicatePairs = duplicates.load();
@@ -1984,6 +2060,7 @@ float rayBox(const Vec3& origin, const Vec3& dir, const Vec3& center, const Vec3
 }  // namespace
 
 float PhysicsWorld::rayBody(uint32_t b, const Vec3& origin, const Vec3& d, Vec3& normal) const {
+    if (kind_[b] == static_cast<uint32_t>(ColliderKind::Plane)) return -1.0f;
     float t;
     if (kind_[b] == static_cast<uint32_t>(ColliderKind::Sphere)) {
         t = raySphere(origin, d, position_[b], radius_[b]);
@@ -2007,6 +2084,7 @@ float PhysicsWorld::rayBody(uint32_t b, const Vec3& origin, const Vec3& d, Vec3&
 }
 
 bool PhysicsWorld::sphereTouchesBody(uint32_t b, const Vec3& center, float radius) const {
+    if (kind_[b] == static_cast<uint32_t>(ColliderKind::Plane)) return false;
     if (kind_[b] != static_cast<uint32_t>(ColliderKind::Box)) {
         const Vec3 pa = position_[b] - segment_[b], pb = position_[b] + segment_[b];
         const Vec3 nearest = pa + (pb - pa) * closestOnSegment(center, pa, pb);
@@ -2026,6 +2104,32 @@ RayHit PhysicsWorld::raycast(const Vec3& origin, const Vec3& dir, float maxDista
     float len = length(dir);
     if (len < 1e-8f || maxDistance <= 0.0f) return hit;
     const Vec3 d = dir / len;
+    for (uint32_t p : planes_) {
+        if (!(filter_[p].layer & layers)) continue;
+        const Vec3 n = segment_[p];
+        const float height = dot(origin - position_[p], n);
+        const float closing = dot(d, n);
+        float t;
+        if (height <= 0.0f)
+            t = 0.0f;
+        else if (closing < -1e-8f)
+            t = -height / closing;
+        else
+            continue;
+        if (t > maxDistance || (hit.hit && t >= hit.distance)) continue;
+        hit.hit = true;
+        hit.entity = entity_[p];
+        hit.distance = t;
+        hit.point = origin + d * t;
+        hit.normal = n;
+    }
+    if (hit.hit) maxDistance = hit.distance;
+    RayHit body = castBodies(origin, d, maxDistance, layers);
+    return body.hit && (!hit.hit || body.distance < hit.distance) ? body : hit;
+}
+
+RayHit PhysicsWorld::castBodies(const Vec3& origin, const Vec3& d, float maxDistance, uint32_t layers) const {
+    RayHit hit;
     if (bruteForce_) {
         float best = maxDistance;
         for (uint32_t b = 0; b < position_.size(); ++b) {
@@ -2105,6 +2209,8 @@ RayHit PhysicsWorld::raycast(const Vec3& origin, const Vec3& dir, float maxDista
 
 void PhysicsWorld::overlapSphere(const Vec3& center, float radius, std::vector<Entity>& out, uint32_t layers) const {
     if (radius <= 0.0f) return;
+    for (uint32_t p : planes_)
+        if ((filter_[p].layer & layers) && dot(center - position_[p], segment_[p]) < radius) out.push_back(entity_[p]);
     if (bruteForce_) {
         for (uint32_t b = 0; b < position_.size(); ++b)
             if ((filter_[b].layer & layers) && sphereTouchesBody(b, center, radius)) out.push_back(entity_[b]);

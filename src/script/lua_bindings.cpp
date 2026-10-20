@@ -115,6 +115,7 @@ int l_spawn(lua_State* L) {
                 const std::string kind = lua_tostring(L, -1);
                 c.kind = static_cast<uint32_t>(kind == "box"       ? ColliderKind::Box
                                                : kind == "capsule" ? ColliderKind::Capsule
+                                               : kind == "plane"   ? ColliderKind::Plane
                                                                    : ColliderKind::Sphere);
             }
             lua_pop(L, 1);

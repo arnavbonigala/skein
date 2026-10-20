@@ -1660,3 +1660,114 @@ TEST(a_lying_capsule_stays_inside_the_walls) {
     CHECK(maxX <= 5.0f - 1.3f + 1e-3f);
     CHECK_NEAR(scene.world.get<Transform>(cap).position.y, 0.3, 0.02);
 }
+
+namespace {
+
+Entity spawnPlane(Scene& s, Vec3 point, Quat rotation) {
+    Transform t;
+    t.position = point;
+    t.rotation = rotation;
+    Entity e = s.create(t);
+    Collider c;
+    c.kind = static_cast<uint32_t>(ColliderKind::Plane);
+    s.world.add<Collider>(e, c);
+    return e;
+}
+
+PhysicsWorld unboundedWorld() {
+    PhysicsWorld physics;
+    physics.settings.useBounds = false;
+    physics.settings.allowSleep = false;
+    return physics;
+}
+
+}  // namespace
+
+TEST(a_tilted_box_topples_onto_a_plane_and_lies_on_a_face) {
+    Scene scene;
+    spawnPlane(scene, Vec3{0, 0, 0}, Quat{});
+    Entity box = spawnBox(scene, Vec3{0, 1.2f, 0}, Quat::axisAngle(normalize(Vec3{1, 0, 0.3f}), 0.5f), Vec3{0.25f, 0.9f, 0.4f});
+    PhysicsWorld physics = unboundedWorld();
+    for (int i = 0; i < 420; ++i) physics.step(scene, 1.0f / 60.0f, nullptr);
+    const Transform& t = scene.world.get<Transform>(box);
+    const float up = std::max({std::abs(rotate(t.rotation, Vec3{1, 0, 0}).y), std::abs(rotate(t.rotation, Vec3{0, 1, 0}).y),
+                               std::abs(rotate(t.rotation, Vec3{0, 0, 1}).y)});
+    CHECK(up > 0.998f);
+    const float height = t.position.y;
+    CHECK(std::abs(height - 0.25f) < 0.02f || std::abs(height - 0.4f) < 0.02f);
+    CHECK(length(scene.world.get<Velocity>(box).linear) < 0.02f);
+}
+
+TEST(a_tilted_capsule_topples_onto_a_plane) {
+    Scene scene;
+    spawnPlane(scene, Vec3{0, 0, 0}, Quat{});
+    Entity cap = spawnCapsule(scene, Vec3{0, 1.2f, 0}, Quat::axisAngle(Vec3{1, 0, 0}, 0.35f), 0.25f, 0.7f);
+    PhysicsWorld physics = unboundedWorld();
+    for (int i = 0; i < 360; ++i) physics.step(scene, 1.0f / 60.0f, nullptr);
+    CHECK(capsuleTilt(scene, cap) < 0.03f);
+    CHECK_NEAR(scene.world.get<Transform>(cap).position.y, 0.25, 0.02);
+}
+
+TEST(a_ball_rolls_down_a_ramp_and_stays_on_it) {
+    Scene scene;
+    const float slope = 0.35f;
+    spawnPlane(scene, Vec3{0, 0, 0}, Quat::axisAngle(Vec3{0, 0, 1}, slope));
+    const Vec3 normal = rotate(Quat::axisAngle(Vec3{0, 0, 1}, slope), Vec3{0, 1, 0});
+    Entity ball = spawnSphere(scene, normal * 0.5f, Vec3{0, 0, 0}, 0.5f);
+    PhysicsWorld physics = unboundedWorld();
+    for (int i = 0; i < 60; ++i) physics.step(scene, 1.0f / 60.0f, nullptr);
+    const Vec3 p = scene.world.get<Transform>(ball).position;
+    CHECK_NEAR(dot(p, normal), 0.5, 0.02);
+    const Vec3 downhill = normalize(cross(Vec3{0, 0, 1}, normal));
+    const double rolling = 9.81 * (std::sin(slope) - 0.25 * std::cos(slope)) / 1.4;
+    CHECK_NEAR(dot(p, downhill), 0.5 * rolling, 0.08);
+}
+
+TEST(a_box_stack_stands_on_a_plane) {
+    Scene scene;
+    spawnPlane(scene, Vec3{0, 0, 0}, Quat{});
+    std::vector<Entity> boxes;
+    for (int i = 0; i < 5; ++i)
+        boxes.push_back(spawnBox(scene, Vec3{0.02f * static_cast<float>(i % 2), 0.5f + static_cast<float>(i) * 1.01f, 0}, Quat{},
+                                 Vec3{0.5f, 0.5f, 0.5f}));
+    PhysicsWorld physics = unboundedWorld();
+    for (int i = 0; i < 300; ++i) physics.step(scene, 1.0f / 60.0f, nullptr);
+    for (int i = 0; i < 5; ++i)
+        CHECK_NEAR(scene.world.get<Transform>(boxes[static_cast<size_t>(i)]).position.y, 0.5 + i * 1.0, 0.05);
+}
+
+TEST(many_spheres_rest_on_a_plane_through_the_grid) {
+    Scene scene;
+    spawnPlane(scene, Vec3{0, 0, 0}, Quat{});
+    std::vector<Entity> balls;
+    for (int i = 0; i < 200; ++i)
+        balls.push_back(spawnSphere(scene, Vec3{static_cast<float>(i % 20) * 1.2f, 1.0f + static_cast<float>(i / 20) * 0.3f,
+                                                static_cast<float>(i / 20) * 1.2f},
+                                    Vec3{0, 0, 0}, 0.5f));
+    PhysicsWorld physics = unboundedWorld();
+    for (int i = 0; i < 240; ++i) physics.step(scene, 1.0f / 60.0f, nullptr);
+    CHECK(physics.stats().gridCells > 0u);
+    for (Entity b : balls) CHECK_NEAR(scene.world.get<Transform>(b).position.y, 0.5, 0.03);
+}
+
+TEST(rays_and_overlaps_meet_a_plane_from_its_front) {
+    Scene scene;
+    Entity floor = spawnPlane(scene, Vec3{0, 1.0f, 0}, Quat{});
+    Entity ball = spawnSphere(scene, Vec3{0, 3.0f, 0}, Vec3{0, 0, 0}, 0.5f, 0.0f);
+    PhysicsWorld physics = unboundedWorld();
+    physics.step(scene, 0.0f, nullptr);
+    RayHit down = physics.raycast(Vec3{0, 5, 0}, Vec3{0, -1, 0}, 20.0f);
+    CHECK_EQ(down.entity, ball);
+    RayHit beside = physics.raycast(Vec3{3, 5, 0}, Vec3{0, -1, 0}, 20.0f);
+    CHECK_EQ(beside.entity, floor);
+    CHECK_NEAR(beside.distance, 4.0, 1e-5);
+    CHECK_NEAR(beside.normal.y, 1.0, 1e-6);
+    CHECK(!physics.raycast(Vec3{3, 5, 0}, Vec3{0, 1, 0}, 20.0f).hit);
+    CHECK(!physics.raycast(Vec3{3, 5, 0}, Vec3{0, -1, 0}, 3.0f).hit);
+    std::vector<Entity> found;
+    physics.overlapSphere(Vec3{3, 1.3f, 0}, 0.5f, found);
+    CHECK_EQ(found.size(), size_t{1});
+    found.clear();
+    physics.overlapSphere(Vec3{3, 1.6f, 0}, 0.5f, found);
+    CHECK(found.empty());
+}
