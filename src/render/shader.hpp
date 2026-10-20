@@ -26,6 +26,7 @@ public:
     void setMat4(const char* name, const Mat4& value);
     void setVec3(const char* name, const Vec3& value);
     void setVec4(const char* name, const Vec4& value);
+    void setVec2(const char* name, float x, float y);
     void setFloat(const char* name, float value);
     void setInt(const char* name, int value);
     void setVec3Array(const char* name, const Vec3* values, int count);

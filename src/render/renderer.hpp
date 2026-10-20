@@ -4,6 +4,7 @@
 
 #include "core/math.hpp"
 #include "render/gpu_mesh.hpp"
+#include "render/post.hpp"
 #include "render/render_list.hpp"
 #include "render/shader.hpp"
 
@@ -25,6 +26,8 @@ struct RenderOptions {
     float fogDensity = 0.0035f;
     float shadowExtent = 55.0f;
     float shadowDistance = 120.0f;
+    bool hdr = true;
+    PostOptions post;
 };
 
 struct RenderStats {
@@ -57,6 +60,10 @@ public:
 
     void render(Scene& scene, const Assets& assets, const Mat4& view, const Mat4& projection,
                 const Vec3& cameraPosition, JobSystem* jobs);
+    void present(int windowWidth, int windowHeight) const;
+    unsigned outputFramebuffer() const { return options.hdr ? post_.finalFramebuffer() : 0; }
+    int width() const { return width_; }
+    int height() const { return height_; }
 
     RenderOptions options;
     const RenderStats& stats() const { return stats_; }
@@ -71,10 +78,12 @@ private:
 
     void collectLights(Scene& scene, const Vec3& cameraPosition);
     Mat4 sunMatrix(const Vec3& focus) const;
+    Vec3 shadowFocus(const Mat4& view, const Vec3& cameraPosition) const;
     void drawList(const RenderList& list, const Assets& assets, Shader& shader, bool applyMaterials,
                   uint32_t instanceBase, uint32_t& drawCallsOut, uint64_t& trianglesOut);
     bool createShadowTarget();
 
+    PostChain post_;
     Shader lit_;
     Shader depth_;
     InstanceBuffer instances_;

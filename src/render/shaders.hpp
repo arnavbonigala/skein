@@ -64,6 +64,7 @@ uniform float uShadowTexel;
 uniform int uShadowEnabled;
 uniform float uFogDensity;
 uniform vec3 uFogColor;
+uniform int uHdr;
 
 float shadowFactor(vec3 normal, vec3 lightDir) {
     if (uShadowEnabled == 0) return 1.0;
@@ -117,6 +118,10 @@ void main() {
     float fog = 1.0 - exp(-uFogDensity * length(uCameraPos - vWorldPos));
     color = mix(color, uFogColor, clamp(fog, 0.0, 1.0));
 
+    if (uHdr != 0) {
+        fragColor = vec4(color, 1.0);
+        return;
+    }
     color = color / (color + vec3(1.0));
     fragColor = vec4(pow(color, vec3(1.0 / 2.2)), 1.0);
 }

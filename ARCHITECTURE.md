@@ -166,6 +166,45 @@ OpenGL 4.1 core against the macOS system framework — no loader library.
 Lighting is Blinn-Phong with a metallic tint, a 2048² PCF shadow map for the sun,
 and up to 32 point lights chosen per frame by distance.
 
+Each instance's tint rides in the bottom row of its model matrix. An affine
+matrix always has (0, 0, 0, 1) there, so the vertex shader reads the colour out
+and puts the row back: per-instance colour costs no extra bandwidth, no extra
+attribute and no change to batching. The shadow map follows the point the camera
+looks at and snaps to its own texels, so shadows do not shimmer as the camera
+moves.
+
+### Post-processing
+
+```
+  scene ──▶ RGBA16F, 4x MSAA ──▶ resolve colour + depth
+                                     │
+          ┌──────────────┬───────────┼──────────────┐
+          ▼              ▼           ▼              ▼
+     SSAO, half res   bloom: prefilter, 6-level   depth for
+     16 samples,      13-tap down, tent up        outlines
+     depth-aware blur        │                      │
+          └──────────────────┴─────────┬────────────┘
+                                       ▼
+            composite: AO, exposure, bloom, outline, ACES, saturation,
+            contrast, vignette ──▶ RGBA8 ──▶ FXAA ──▶ final target
+```
+
+The final target has its own resolution, independent of the window, and is what
+`VideoRecorder` reads. `present()` scales it into the window. Outlines are the
+Laplacian of reciprocal depth, which is exactly zero across any flat surface, so
+silhouettes and creases are inked and a floor at a grazing angle is not.
+
+| GPU time, showcase scene | 1080p | 4K |
+|---|---|---|
+| whole frame, every pass on | 3.8 ms | 15.1 ms |
+| SSAO | | 2.3 ms |
+| bloom | | 2.3 ms |
+| 4x MSAA over 1x | | 3.8 ms |
+| FXAA | | 1.1 ms |
+
+The recorder reads through a ring of three pixel buffer objects, so frame N is
+copied off the GPU while frame N + 1 renders and nothing waits on a readback.
+
 ## Serialization
 
 A versioned binary format writing each registered pool verbatim.

@@ -2,6 +2,7 @@
 #include <cstdio>
 #include <cstring>
 #include <string>
+#include <vector>
 
 #include "app/camera.hpp"
 #include "app/demo_scene.hpp"
@@ -43,6 +44,7 @@ void printHelp() {
         "  L      shadows on or off                B      draw cull bounds\n"
         "  C      freeze the culling camera        P      dump the frame profile\n"
         "  V      vsync                            Space bar pause is O\n"
+        "  G      post-processing on or off        --resolution 1920x1080 renders at a fixed size\n"
         "  F5/F9  save or load scene.skn         --record out.mp4 to capture video\n\n");
 }
 
@@ -86,6 +88,10 @@ void keyCallback(GLFWwindow* window, int key, int scancode, int action, int mods
         case GLFW_KEY_P:
             std::printf("\n%s\n", Profiler::instance().report().c_str());
             break;
+        case GLFW_KEY_G:
+            g.renderer->options.hdr = !g.renderer->options.hdr;
+            std::printf("post-processing %s\n", g.renderer->options.hdr ? "on" : "off");
+            break;
         case GLFW_KEY_V:
             g.vsync = !g.vsync;
             glfwSwapInterval(g.vsync ? 1 : 0);
@@ -112,6 +118,33 @@ void keyCallback(GLFWwindow* window, int key, int scancode, int action, int mods
         default:
             break;
     }
+}
+
+bool setPostOption(PostOptions& o, const char* assignment) {
+    char name[64] = {0};
+    float value = 0.0f;
+    if (std::sscanf(assignment, "%63[^=]=%f", name, &value) != 2) return false;
+    const std::string key = name;
+    if (key == "exposure") o.exposure = value;
+    else if (key == "saturation") o.saturation = value;
+    else if (key == "contrast") o.contrast = value;
+    else if (key == "vignette") o.vignette = value;
+    else if (key == "bloom") o.bloom = value != 0.0f;
+    else if (key == "bloomThreshold") o.bloomThreshold = value;
+    else if (key == "bloomStrength") o.bloomStrength = value;
+    else if (key == "bloomRadius") o.bloomRadius = value;
+    else if (key == "ssao") o.ssao = value != 0.0f;
+    else if (key == "ssaoRadius") o.ssaoRadius = value;
+    else if (key == "ssaoPower") o.ssaoPower = value;
+    else if (key == "ssaoAmount") o.ssaoAmount = value;
+    else if (key == "outline") o.outline = value;
+    else if (key == "outlineWidth") o.outlineWidth = value;
+    else if (key == "outlineLow") o.outlineLow = value;
+    else if (key == "outlineHigh") o.outlineHigh = value;
+    else if (key == "fxaa") o.fxaa = value != 0.0f;
+    else if (key == "msaa") o.msaa = static_cast<int>(value);
+    else return false;
+    return true;
 }
 
 struct CaptureConfig {
@@ -161,6 +194,8 @@ int main(int argc, char** argv) {
     int captureFrames = 0;
     const char* recordPath = nullptr;
     bool showcase = false;
+    int fixedWidth = 0, fixedHeight = 0;
+    std::vector<const char*> postAssignments;
     std::string scriptPath = std::string(SKEIN_ASSET_DIR) + "/scripts/demo.lua";
     for (int i = 1; i < argc; ++i) {
         if (std::strcmp(argv[i], "--entities") == 0 && i + 1 < argc)
@@ -179,6 +214,10 @@ int main(int argc, char** argv) {
             recordPath = argv[++i];
         else if (std::strcmp(argv[i], "--showcase") == 0)
             showcase = true;
+        else if (std::strcmp(argv[i], "--post") == 0 && i + 1 < argc)
+            postAssignments.push_back(argv[++i]);
+        else if (std::strcmp(argv[i], "--resolution") == 0 && i + 1 < argc)
+            std::sscanf(argv[++i], "%dx%d", &fixedWidth, &fixedHeight);
     }
 
     if (!glfwInit()) {
@@ -227,11 +266,15 @@ int main(int argc, char** argv) {
         renderer.options.fogDensity = 0.004f;
         renderer.options.shadowExtent = 20.0f;
         renderer.options.shadowDistance = 60.0f;
+        renderer.options.post.exposure = 0.6f;
     } else {
         demo.build(config, &jobs);
     }
     double buildMs = millisSince(buildStart);
     renderer.uploadAssets(demo.assets);
+
+    for (const char* assignment : postAssignments)
+        if (!setPostOption(renderer.options.post, assignment)) std::fprintf(stderr, "unknown --post %s\n", assignment);
 
     if (!showcase && config.runScripts && !demo.loadScript(scriptPath, error))
         std::fprintf(stderr, "script: %s\n", error.c_str());
@@ -276,6 +319,10 @@ int main(int argc, char** argv) {
                 glfwPollEvents();
                 int width = 0, height = 0;
                 glfwGetFramebufferSize(window, &width, &height);
+                if (fixedWidth > 0 && fixedHeight > 0) {
+                    width = fixedWidth;
+                    height = fixedHeight;
+                }
                 renderer.resize(width, height);
                 renderer.render(demo.scene, demo.assets, g.camera.view(),
                                 g.camera.projection(static_cast<float>(width) / static_cast<float>(height)),
@@ -322,8 +369,10 @@ int main(int argc, char** argv) {
 
     VideoRecorder recorder;
     if (recordPath) {
-        int width = 0, height = 0;
-        glfwGetFramebufferSize(window, &width, &height);
+        g.mouseCaptured = false;
+        glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_NORMAL);
+        int width = fixedWidth, height = fixedHeight;
+        if (width <= 0 || height <= 0) glfwGetFramebufferSize(window, &width, &height);
         if (recorder.open(recordPath, width, height, 60, error))
             std::printf("recording %dx%d to %s\n", width, height, recordPath);
         else
@@ -344,8 +393,10 @@ int main(int argc, char** argv) {
 
         if (!g.paused) demo.update(dt, &jobs);
 
-        int width = 0, height = 0;
-        glfwGetFramebufferSize(window, &width, &height);
+        int windowWidth = 0, windowHeight = 0;
+        glfwGetFramebufferSize(window, &windowWidth, &windowHeight);
+        const int width = fixedWidth > 0 ? fixedWidth : windowWidth;
+        const int height = fixedHeight > 0 ? fixedHeight : windowHeight;
         renderer.resize(width, height);
 
         Mat4 view = g.camera.view();
@@ -369,7 +420,8 @@ int main(int argc, char** argv) {
             glEnable(GL_DEPTH_TEST);
         }
 
-        recorder.capture();
+        recorder.capture(renderer.outputFramebuffer());
+        renderer.present(windowWidth, windowHeight);
         glfwSwapBuffers(window);
         Profiler::instance().endFrame();
 

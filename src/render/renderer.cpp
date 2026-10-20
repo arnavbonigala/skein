@@ -21,6 +21,7 @@ Renderer::~Renderer() {
 bool Renderer::init(std::string& error) {
     if (!lit_.compile(shaders::LIT_VERTEX, shaders::LIT_FRAGMENT, error)) return false;
     if (!depth_.compile(shaders::DEPTH_VERTEX, shaders::DEPTH_FRAGMENT, error)) return false;
+    if (!post_.init(error)) return false;
     if (!createShadowTarget()) {
         error = "shadow framebuffer is incomplete";
         return false;
@@ -100,6 +101,21 @@ void Renderer::collectLights(Scene& scene, const Vec3& cameraPosition) {
     }
 }
 
+Vec3 Renderer::shadowFocus(const Mat4& view, const Vec3& cameraPosition) const {
+    const Vec3 forward{-view.m[0][2], -view.m[1][2], -view.m[2][2]};
+    Vec3 focus = cameraPosition + forward * (options.shadowExtent * 0.6f);
+    focus.y = 0.0f;
+    const Vec3 dir = normalize(sunDirection_);
+    const Vec3 up = std::fabs(dir.y) > 0.95f ? Vec3{0, 0, 1} : Vec3{0, 1, 0};
+    const Vec3 right = normalize(cross(dir, up));
+    const Vec3 lift = cross(right, dir);
+    const float texel = 2.0f * options.shadowExtent / static_cast<float>(shadowSize_);
+    const float x = std::floor(dot(focus, right) / texel) * texel;
+    const float y = std::floor(dot(focus, lift) / texel) * texel;
+    const float z = dot(focus, dir);
+    return right * x + lift * y + dir * z;
+}
+
 Mat4 Renderer::sunMatrix(const Vec3& focus) const {
     Vec3 dir = normalize(sunDirection_);
     Vec3 up = std::fabs(dir.y) > 0.95f ? Vec3{0, 0, 1} : Vec3{0, 1, 0};
@@ -136,6 +152,10 @@ void Renderer::drawList(const RenderList& list, const Assets& assets, Shader& sh
     }
 }
 
+void Renderer::present(int windowWidth, int windowHeight) const {
+    if (options.hdr) post_.present(windowWidth, windowHeight);
+}
+
 void Renderer::render(Scene& scene, const Assets& assets, const Mat4& view, const Mat4& projection,
                       const Vec3& cameraPosition, JobSystem* jobs) {
     SKEIN_PROFILE("render/frame");
@@ -159,7 +179,7 @@ void Renderer::render(Scene& scene, const Assets& assets, const Mat4& view, cons
 
     Mat4 lightViewProj = Mat4::identity();
     if (options.shadows) {
-        lightViewProj = sunMatrix(Vec3{cameraPosition.x, 0.0f, cameraPosition.z});
+        lightViewProj = sunMatrix(shadowFocus(view, cameraPosition));
         shadowCuller_.build(scene, extractFrustum(lightViewProj),
                             static_cast<uint32_t>(assets.materialCount()), shadowList_, jobs, true);
     } else {
@@ -200,11 +220,17 @@ void Renderer::render(Scene& scene, const Assets& assets, const Mat4& view, cons
 
     {
         SKEIN_PROFILE("render/mainPass");
-        glViewport(0, 0, width_, height_);
-        glClearColor(options.skyColor.x, options.skyColor.y, options.skyColor.z, 1.0f);
-        glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+        if (options.hdr && post_.resize(width_, height_, options.post.msaa)) {
+            post_.beginScene(options.skyColor);
+        } else {
+            options.hdr = false;
+            glViewport(0, 0, width_, height_);
+            glClearColor(options.skyColor.x, options.skyColor.y, options.skyColor.z, 1.0f);
+            glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+        }
 
         lit_.bind();
+        lit_.setInt("uHdr", options.hdr ? 1 : 0);
         lit_.setMat4("uViewProj", viewProj);
         lit_.setMat4("uLightViewProj", lightViewProj);
         lit_.setVec3("uCameraPos", cameraPosition);
@@ -236,11 +262,17 @@ void Renderer::render(Scene& scene, const Assets& assets, const Mat4& view, cons
     }
 
     glBindVertexArray(0);
+    if (options.hdr) {
+        SKEIN_PROFILE("render/post");
+        post_.finish(options.post, projection);
+        glBindFramebuffer(GL_FRAMEBUFFER, post_.finalFramebuffer());
+        glViewport(0, 0, width_, height_);
+    }
     stats_.submitMs = millisSince(submitStart);
     stats_.candidates = mainList_.totalCandidates;
     stats_.visible = mainList_.visible;
     stats_.pointLights = static_cast<uint32_t>(pointLights_.size());
-    stats_.gpuBytes = meshBytes_ + instances_.capacityBytes() +
+    stats_.gpuBytes = meshBytes_ + instances_.capacityBytes() + post_.gpuBytes() +
                       static_cast<size_t>(shadowSize_) * static_cast<size_t>(shadowSize_) * 3;
 
     if (timerQueries_[0]) {

@@ -117,6 +117,11 @@ void Shader::setVec4(const char* name, const Vec4& value) {
     if (loc >= 0) glUniform4f(loc, value.x, value.y, value.z, value.w);
 }
 
+void Shader::setVec2(const char* name, float x, float y) {
+    int loc = location(name);
+    if (loc >= 0) glUniform2f(loc, x, y);
+}
+
 void Shader::setFloat(const char* name, float value) {
     int loc = location(name);
     if (loc >= 0) glUniform1f(loc, value);
