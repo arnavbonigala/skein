@@ -8,6 +8,7 @@
 #include "core/profiler.hpp"
 #include "render/gl.hpp"
 #include "render/shaders.hpp"
+#include "scene/particles.hpp"
 #include "scene/scene.hpp"
 
 namespace skein {
@@ -22,6 +23,7 @@ bool Renderer::init(std::string& error) {
     if (!lit_.compile(shaders::LIT_VERTEX, shaders::LIT_FRAGMENT, error)) return false;
     if (!depth_.compile(shaders::DEPTH_VERTEX, shaders::DEPTH_FRAGMENT, error)) return false;
     if (!post_.init(error)) return false;
+    if (!particleRenderer_.init(error)) return false;
     if (!createShadowTarget()) {
         error = "shadow framebuffer is incomplete";
         return false;
@@ -196,6 +198,7 @@ void Renderer::render(Scene& scene, const Assets& assets, const Mat4& view, cons
         staging.insert(staging.end(), shadowList_.instances.begin(), shadowList_.instances.end());
         instances_.upload(staging.data(), staging.size());
         staging.resize(mainCount);
+        particleRenderer_.upload(particles);
     }
 
     Clock::time_point submitStart = Clock::now();
@@ -259,6 +262,8 @@ void Renderer::render(Scene& scene, const Assets& assets, const Mat4& view, cons
         lit_.setInt("uShadowMap", 0);
 
         drawList(mainList_, assets, lit_, true, 0, stats_.drawCalls, stats_.triangles);
+
+        particleRenderer_.draw(particles, view, viewProj, options.ambientSky + sunColor_ * (sunIntensity_ * 0.5f));
     }
 
     glBindVertexArray(0);
@@ -272,7 +277,7 @@ void Renderer::render(Scene& scene, const Assets& assets, const Mat4& view, cons
     stats_.candidates = mainList_.totalCandidates;
     stats_.visible = mainList_.visible;
     stats_.pointLights = static_cast<uint32_t>(pointLights_.size());
-    stats_.gpuBytes = meshBytes_ + instances_.capacityBytes() + post_.gpuBytes() +
+    stats_.gpuBytes = meshBytes_ + instances_.capacityBytes() + post_.gpuBytes() + particleRenderer_.gpuBytes() +
                       static_cast<size_t>(shadowSize_) * static_cast<size_t>(shadowSize_) * 3;
 
     if (timerQueries_[0]) {

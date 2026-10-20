@@ -4,6 +4,7 @@
 
 #include "core/math.hpp"
 #include "render/gpu_mesh.hpp"
+#include "render/particle_renderer.hpp"
 #include "render/post.hpp"
 #include "render/render_list.hpp"
 #include "render/shader.hpp"
@@ -13,6 +14,7 @@ namespace skein {
 class Assets;
 class Scene;
 class JobSystem;
+class ParticleSystem;
 
 struct RenderOptions {
     bool frustumCulling = true;
@@ -66,6 +68,7 @@ public:
     int height() const { return height_; }
 
     RenderOptions options;
+    std::vector<const ParticleSystem*> particles;
     const RenderStats& stats() const { return stats_; }
     const RenderList& mainList() const { return mainList_; }
     size_t cpuSideBytes() const { return culler_.bytesUsed() + shadowCuller_.bytesUsed(); }
@@ -84,6 +87,7 @@ private:
     bool createShadowTarget();
 
     PostChain post_;
+    ParticleRenderer particleRenderer_;
     Shader lit_;
     Shader depth_;
     InstanceBuffer instances_;
