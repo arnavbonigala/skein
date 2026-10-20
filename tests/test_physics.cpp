@@ -1220,3 +1220,35 @@ TEST(a_jointed_pair_sleeps_together_and_wakes_together) {
     CHECK(length(scene.world.get<Transform>(b).position - Vec3{4.0f, 0, 0}) > 0.1f);
     CHECK_NEAR(length(scene.world.get<Transform>(b).position - scene.world.get<Transform>(a).position), 2.0, 0.1);
 }
+
+TEST(a_fixed_rotation_body_keeps_its_orientation_through_an_off_centre_hit) {
+    for (int fixed = 0; fixed < 2; ++fixed) {
+        Scene scene;
+        Transform t;
+        t.position = Vec3{0, 0, 0};
+        t.rotation = Quat::axisAngle(Vec3{0, 1, 0}, 0.4f);
+        Entity box = scene.create(t);
+        scene.world.add<Velocity>(box, Velocity{});
+        Collider c;
+        c.kind = static_cast<uint32_t>(ColliderKind::Box);
+        c.halfExtents = Vec3{1.0f, 0.5f, 0.5f};
+        c.fixedRotation = static_cast<uint32_t>(fixed);
+        scene.world.add<Collider>(box, c);
+        spawnSphere(scene, Vec3{0.8f, 0, 3.0f}, Vec3{0, 0, -8.0f}, 0.3f);
+
+        PhysicsWorld physics;
+        physics.settings.gravity = Vec3{0, 0, 0};
+        physics.settings.useBounds = false;
+        for (int i = 0; i < 60; ++i) physics.step(scene, 1.0f / 60.0f, nullptr);
+
+        Quat q = scene.world.get<Transform>(box).rotation;
+        float drift = std::abs(dot(Vec4{q.x, q.y, q.z, q.w}, Vec4{t.rotation.x, t.rotation.y, t.rotation.z, t.rotation.w}));
+        if (fixed) {
+            CHECK_NEAR(drift, 1.0, 1e-5);
+            CHECK_NEAR(length(scene.world.get<Velocity>(box).angular), 0.0, 1e-6);
+            CHECK(scene.world.get<Velocity>(box).linear.z < -0.5f);
+        } else {
+            CHECK(drift < 0.9999f);
+        }
+    }
+}

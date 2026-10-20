@@ -40,6 +40,8 @@ struct Collider {
     /// whether it has crossed the threshold. The physics world owns both.
     float sleepTimer = 0.0f;
     uint32_t asleep = 0;
+    uint32_t fixedRotation = 0;
+    uint32_t pad = 0;
 };
 
 /// Holds two bodies a fixed distance apart, measured between an anchor point

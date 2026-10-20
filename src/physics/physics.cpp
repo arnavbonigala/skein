@@ -333,7 +333,7 @@ void PhysicsWorld::gather(Scene& scene) {
         entity_[m] = e;
         position_[m] = t->position;
         body_[m].v = linear;
-        body_[m].w = v ? v->angular : Vec3{0, 0, 0};
+        body_[m].w = v && !c.fixedRotation ? v->angular : Vec3{0, 0, 0};
         orientation_[m] = t->rotation;
         // A box whose rotation is identity is its own axis-aligned extent, and
         // the cheap test is exact for it. Everything else carries its three
@@ -367,7 +367,7 @@ void PhysicsWorld::gather(Scene& scene) {
         // single number for both cannot say so: it either spins a body up out
         // of a graze or refuses to let anything tumble.
         Vec3 li{0, 0, 0};
-        if (c.invMass > 0.0f && reach > 0.0f) {
+        if (c.invMass > 0.0f && reach > 0.0f && !c.fixedRotation) {
             if (c.kind == static_cast<uint32_t>(ColliderKind::Sphere)) {
                 const float r = c.radius * s;
                 li = Vec3{1, 1, 1} * (c.invMass * 2.5f / (r * r));

@@ -274,6 +274,13 @@ positional correction to be as strong as it is.
 falls below it — gravity re-accelerates it every step and the contact impulse
 cancels it right back.
 
+## Fixed rotation
+
+A collider with `fixedRotation` set gets zero inverse inertia, so no contact or
+joint can turn it. The orientation stays whatever the transform says, which lets
+a game steer a character's facing directly while the solver still handles its
+position.
+
 ## Queries
 
 Both answer from the grid the last step built.
