@@ -284,6 +284,7 @@ private:
     std::vector<float> liveDepth_;
     std::vector<float> normalImpulse_;
     std::vector<Vec3> tangentImpulse_;
+    std::vector<Vec3> rollImpulse_;
     std::vector<float> deepest_;
     std::vector<float> restitutionBias_;
     std::vector<float> approach_;

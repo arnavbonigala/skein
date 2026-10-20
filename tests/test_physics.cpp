@@ -1517,3 +1517,27 @@ TEST(queries_skip_layers_they_are_not_asked_about) {
     physics.overlapSphere(Vec3{0, 0, 2.0f}, 1.0f, found, 1u);
     CHECK(found.empty());
 }
+
+TEST(a_rolling_ball_slows_at_the_rate_its_rolling_resistance_predicts) {
+    auto rolled = [](float floorHalf) {
+        Scene scene;
+        Transform f;
+        f.position = Vec3{0, 0.5f, 0};
+        Entity floor = scene.create(f);
+        Collider fc;
+        fc.kind = static_cast<uint32_t>(ColliderKind::Box);
+        fc.halfExtents = Vec3{floorHalf, 0.5f, 3.0f};
+        fc.invMass = 0.0f;
+        scene.world.add<Collider>(floor, fc);
+        Entity ball = spawnSphere(scene, Vec3{0, 1.5f, 0}, Vec3{3.0f, 0, 0}, 0.5f);
+        scene.world.get<Velocity>(ball).angular = Vec3{0, 0, -6.0f};
+        PhysicsWorld physics;
+        physics.settings.allowSleep = false;
+        physics.settings.useBounds = false;
+        for (int i = 0; i < 60; ++i) physics.step(scene, 1.0f / 60.0f, nullptr);
+        return scene.world.get<Transform>(ball).position.x;
+    };
+    const double expected = 3.0 - 0.5 * (0.25 * 9.81 / 1.4);
+    CHECK_NEAR(rolled(4.0f), expected, 0.12);
+    CHECK_NEAR(rolled(40.0f), expected, 0.12);
+}

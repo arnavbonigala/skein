@@ -1227,11 +1227,22 @@ void PhysicsWorld::solveRange(uint32_t begin, uint32_t end, bool positional, flo
             float wl = length(spin);
             float iiSum = iiA + iiB;
             if (wl > 1e-9f && iiSum > 0.0f) {
-                float budget = kRollingFriction * total * 0.5f * (reach_[c.a] + reach_[c.b]);
-                float applyR = std::min(wl / iiSum, budget);
-                Vec3 dir = spin / wl;
-                body_[c.a].w += dir * (applyR * iiA);
-                body_[c.b].w -= dir * (applyR * iiB);
+                const float rollA = kind_[c.a] == static_cast<uint32_t>(ColliderKind::Box) ? 0.0f : radius_[c.a];
+                const float rollB = kind_[c.b] == static_cast<uint32_t>(ColliderKind::Box) ? 0.0f : radius_[c.b];
+                const bool both = rollA > 0.0f && rollB > 0.0f;
+                const float budget = kRollingFriction * total * (both ? 0.5f * (rollA + rollB) : rollA + rollB);
+                const Vec3 dir = spin / wl;
+                const float stiffness = dot(dir, this->spin(c.a, dir)) + dot(dir, this->spin(c.b, dir));
+                if (stiffness > 1e-12f) {
+                    Vec3& held = rollImpulse_[k];
+                    Vec3 want = held + dir * (wl / stiffness);
+                    const float wantLength = length(want);
+                    if (wantLength > budget) want = want * (budget / wantLength);
+                    const Vec3 applyR = want - held;
+                    held = want;
+                    body_[c.a].w += this->spin(c.a, applyR);
+                    body_[c.b].w -= this->spin(c.b, applyR);
+                }
             }
         }
 
@@ -1284,6 +1295,7 @@ void PhysicsWorld::loadCachedImpulses(JobSystem* jobs) {
     tangentImpulse_.resize(n);
     restitutionBias_.resize(n);
     approach_.resize(n);
+    rollImpulse_.assign(n, Vec3{0, 0, 0});
     auto body = [&](size_t begin, size_t end) {
         for (size_t i = begin; i < end; ++i) {
             uint64_t key = contactKey(entity_[contacts_[i].a], entity_[contacts_[i].b]) ^
