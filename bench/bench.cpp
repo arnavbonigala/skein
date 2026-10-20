@@ -16,6 +16,8 @@
 #include "assets/mesh.hpp"
 #include "core/jobs.hpp"
 #include "core/profiler.hpp"
+#include "core/random.hpp"
+#include "physics/physics.hpp"
 #include "render/render_list.hpp"
 #include "scene/serialize.hpp"
 
@@ -256,11 +258,94 @@ struct FlatNode {
 
 }  // namespace
 
+struct SmallWorld {
+    Scene scene;
+    PhysicsWorld physics;
+};
+
+void buildSmallWorld(SmallWorld& w, uint32_t seed, int dynamic, int obstacles) {
+    Random rng(seed);
+    w.physics.settings.boundsMin = Vec3{-8, 0, -8};
+    w.physics.settings.boundsMax = Vec3{8, 20, 8};
+    w.physics.settings.allowSleep = false;
+    for (int i = 0; i < obstacles; ++i) {
+        Transform t;
+        t.position = Vec3{rng.uniform(-6, 6), 0.5f, rng.uniform(-6, 6)};
+        Entity e = w.scene.create(t);
+        Collider c;
+        c.kind = static_cast<uint32_t>(ColliderKind::Box);
+        c.halfExtents = Vec3{0.5f, 0.5f, 0.5f};
+        c.invMass = 0.0f;
+        w.scene.world.add<Collider>(e, c);
+    }
+    for (int i = 0; i < dynamic; ++i) {
+        Transform t;
+        t.position = Vec3{rng.uniform(-7, 7), rng.uniform(0.5f, 3.0f), rng.uniform(-7, 7)};
+        Entity e = w.scene.create(t);
+        w.scene.world.add<Velocity>(e, Velocity{Vec3{rng.uniform(-4, 4), 0, rng.uniform(-4, 4)}, Vec3{0, 0, 0}});
+        Collider c;
+        c.radius = 0.5f;
+        c.fixedRotation = 1;
+        w.scene.world.add<Collider>(e, c);
+    }
+}
+
+void driveSmallWorld(SmallWorld& w, Random& rng) {
+    forEach<Velocity>(w.scene.world, [&](Entity, Velocity& v) {
+        v.linear.x += rng.uniform(-1.0f, 1.0f);
+        v.linear.z += rng.uniform(-1.0f, 1.0f);
+    });
+}
+
+void benchSmallWorlds(JobSystem& jobs, int iterations) {
+    heading("many small worlds (24 bodies each: 16 moving spheres, 8 static boxes)");
+    SmallWorld single;
+    buildSmallWorld(single, 1, 16, 8);
+    Random drive(5);
+    for (int i = 0; i < 120; ++i) single.physics.step(single.scene, 1.0f / 60.0f, nullptr);
+    const int batch = 200;
+    Timing one = measure(3, iterations * 2, [&] {
+        for (int k = 0; k < batch; ++k) {
+            driveSmallWorld(single, drive);
+            single.physics.step(single.scene, 1.0f / 60.0f, nullptr);
+        }
+    });
+    one.median /= batch;
+    one.cpu /= batch;
+    row("one world, one step", one.median,
+        format("%.2f us, %.0f steps/s on one core, %u contacts, %s broadphase", one.median * 1e3, 1e3 / one.median,
+               single.physics.stats().contacts, single.physics.stats().gridCells ? "grid" : "brute force"));
+
+    const int count = 4096;
+    std::vector<std::unique_ptr<SmallWorld>> worlds;
+    std::vector<Random> drivers;
+    for (int i = 0; i < count; ++i) {
+        worlds.push_back(std::make_unique<SmallWorld>());
+        buildSmallWorld(*worlds.back(), static_cast<uint32_t>(i + 11), 16, 8);
+        drivers.emplace_back(static_cast<uint64_t>(i) + 99u);
+    }
+    auto stepAll = [&] {
+        jobs.parallelFor(worlds.size(), 16, [&](size_t lo, size_t hi) {
+            for (size_t i = lo; i < hi; ++i) {
+                driveSmallWorld(*worlds[i], drivers[i]);
+                worlds[i]->physics.step(worlds[i]->scene, 1.0f / 60.0f, nullptr);
+            }
+        });
+    };
+    for (int i = 0; i < 30; ++i) stepAll();
+    Timing all = measure(5, iterations, stepAll);
+    const double worldSteps = count / (all.median * 1e-3);
+    row(format("%d worlds, one step each", count).c_str(), all,
+        format("%.2fM world-steps/s, %.1fM body-steps/s, %.2fx one core", worldSteps * 1e-6, worldSteps * 24e-6,
+               (one.median * count) / all.median));
+}
+
 int main(int argc, char** argv) {
     DemoConfig config;
     config.runScripts = false;
     int iterations = 40;
     bool runSweep = false;
+    bool onlyWorlds = false;
     const char* saveTo = nullptr;
     for (int i = 1; i < argc; ++i) {
         if (std::strcmp(argv[i], "--entities") == 0 && i + 1 < argc) config.entityCount = std::atoi(argv[++i]);
@@ -268,6 +353,7 @@ int main(int argc, char** argv) {
         else if (std::strcmp(argv[i], "--colliders") == 0 && i + 1 < argc) config.colliderCount = std::atoi(argv[++i]);
         else if (std::strcmp(argv[i], "--iterations") == 0 && i + 1 < argc) iterations = std::atoi(argv[++i]);
         else if (std::strcmp(argv[i], "--sweep") == 0) runSweep = true;
+        else if (std::strcmp(argv[i], "--worlds") == 0) onlyWorlds = true;
         else if (std::strcmp(argv[i], "--save") == 0 && i + 1 < argc) saveTo = argv[++i];
         else if (std::strcmp(argv[i], "--compare") == 0 && i + 1 < argc) {
             if (!readRecords(argv[++i], gBaseline))
@@ -292,6 +378,11 @@ int main(int argc, char** argv) {
         }
     }
     std::printf("  job system threads    %d (%d workers + caller)\n", jobs.threadCount(), jobs.workerCount());
+    if (onlyWorlds) {
+        benchSmallWorlds(jobs, iterations);
+        std::printf("\n");
+        return 0;
+    }
     std::printf("  entities              %d\n", config.entityCount);
     std::printf("  renderables           %d\n", config.renderableCount);
     std::printf("  physics bodies        %d\n", config.colliderCount);
@@ -387,6 +478,8 @@ int main(int argc, char** argv) {
              format("%.0fx fewer than all-pairs (%.2e)",
                     allPairs / std::max<double>(static_cast<double>(ps.pairsTested), 1.0), allPairs));
     }
+
+    benchSmallWorlds(jobs, iterations);
 
     heading("stack convergence (32 columns of 8 spheres)");
     {
