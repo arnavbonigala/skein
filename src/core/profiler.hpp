@@ -87,8 +87,15 @@ struct ScopedZone {
 
 #define SKEIN_CONCAT_INNER(a, b) a##b
 #define SKEIN_CONCAT(a, b) SKEIN_CONCAT_INNER(a, b)
+#ifndef SKEIN_PROFILING
+#define SKEIN_PROFILING 1
+#endif
+#if SKEIN_PROFILING
 #define SKEIN_PROFILE(name)                                    \
     static const int SKEIN_CONCAT(zoneHandle_, __LINE__) = ::skein::Profiler::zone(name); \
     ::skein::ScopedZone SKEIN_CONCAT(zoneScope_, __LINE__)(SKEIN_CONCAT(zoneHandle_, __LINE__))
+#else
+#define SKEIN_PROFILE(name) static_cast<void>(0)
+#endif
 
 }  // namespace skein
