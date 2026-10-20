@@ -1422,3 +1422,98 @@ TEST(a_kinematic_body_keeps_its_velocity_and_shoves_what_it_meets) {
     CHECK_NEAR(scene.world.get<Transform>(paddle).position.y, 0.5, 1e-6);
     CHECK(scene.world.get<Transform>(ball).position.x > 1.5f);
 }
+
+namespace {
+
+Entity spawnStaticBox(Scene& s, Vec3 pos, Vec3 half) {
+    Transform t;
+    t.position = pos;
+    Entity e = s.create(t);
+    Collider c;
+    c.kind = static_cast<uint32_t>(ColliderKind::Box);
+    c.halfExtents = half;
+    c.invMass = 0.0f;
+    s.world.add<Collider>(e, c);
+    return e;
+}
+
+}  // namespace
+
+TEST(layers_and_masks_decide_which_pairs_collide) {
+    auto restingHeight = [](uint32_t ballLayer, uint32_t shelfMask) {
+        Scene scene;
+        Entity shelf = spawnStaticBox(scene, Vec3{0, 2.0f, 0}, Vec3{2, 0.25f, 2});
+        scene.world.get<Collider>(shelf).mask = shelfMask;
+        Entity ball = spawnSphere(scene, Vec3{0, 4.0f, 0}, Vec3{0, 0, 0}, 0.5f);
+        scene.world.get<Collider>(ball).layer = ballLayer;
+        PhysicsWorld physics;
+        for (int i = 0; i < 180; ++i) physics.step(scene, 1.0f / 60.0f, nullptr);
+        return scene.world.get<Transform>(ball).position.y;
+    };
+    CHECK_NEAR(restingHeight(1u, 0xFFFFFFFFu), 2.75, 0.05);
+    CHECK_NEAR(restingHeight(2u, ~2u), 0.5, 0.05);
+    CHECK_NEAR(restingHeight(4u, 0xFFFFFFFFu), 2.75, 0.05);
+}
+
+TEST(a_sensor_reports_overlaps_and_pushes_nothing) {
+    for (uint32_t bruteBelow : {0u, 64u}) {
+        Scene scene;
+        Entity zone = spawnStaticBox(scene, Vec3{0, 1.0f, 0}, Vec3{1, 1, 1});
+        scene.world.get<Collider>(zone).sensor = 1;
+        Entity ball = spawnSphere(scene, Vec3{-3.0f, 1.0f, 0}, Vec3{3.0f, 0, 0}, 0.25f);
+        PhysicsWorld physics;
+        physics.settings.bruteForceBelow = bruteBelow;
+        physics.settings.gravity = Vec3{0, 0, 0};
+        physics.settings.linearDamping = 0.0f;
+        int framesInside = 0;
+        for (int i = 0; i < 120; ++i) {
+            physics.step(scene, 1.0f / 60.0f, nullptr);
+            const auto& overlaps = physics.sensorOverlaps();
+            if (overlaps.empty()) continue;
+            CHECK_EQ(overlaps.size(), size_t{1});
+            CHECK_EQ(overlaps[0].sensor, zone);
+            CHECK_EQ(overlaps[0].other, ball);
+            ++framesInside;
+        }
+        CHECK_NEAR(scene.world.get<Velocity>(ball).linear.x, 3.0, 1e-5);
+        CHECK(framesInside >= 40 && framesInside <= 52);
+        CHECK(physics.sensorOverlaps().empty());
+    }
+}
+
+TEST(contact_reports_sum_the_impulse_that_holds_a_body_up) {
+    Scene scene;
+    Entity shelf = spawnStaticBox(scene, Vec3{0, 1.0f, 0}, Vec3{2, 0.25f, 2});
+    Entity ball = spawnSphere(scene, Vec3{0, 1.75f, 0}, Vec3{0, 0, 0}, 0.5f);
+    Entity crate = spawnBox(scene, Vec3{1.0f, 1.75f, 0}, Quat{}, Vec3{0.4f, 0.5f, 0.4f});
+    PhysicsWorld physics;
+    physics.settings.allowSleep = false;
+    for (int i = 0; i < 240; ++i) physics.step(scene, 1.0f / 60.0f, nullptr);
+    std::vector<ContactReport> reports;
+    physics.reportContacts(reports);
+    CHECK_EQ(reports.size(), size_t{2});
+    for (const ContactReport& r : reports) {
+        CHECK(r.a == shelf || r.b == shelf);
+        CHECK_NEAR(r.impulse, 9.81 / 60.0, 0.02);
+        if (r.a == crate || r.b == crate) CHECK_EQ(r.points, 4u);
+        if (r.a == ball || r.b == ball) CHECK_EQ(r.points, 1u);
+    }
+    std::vector<ContactReport> hard;
+    physics.reportContacts(hard, 1.0f);
+    CHECK(hard.empty());
+}
+
+TEST(queries_skip_layers_they_are_not_asked_about) {
+    Scene scene;
+    Entity near = spawnStaticBox(scene, Vec3{0, 0, 2.0f}, Vec3{0.5f, 0.5f, 0.5f});
+    Entity far = spawnStaticBox(scene, Vec3{0, 0, 5.0f}, Vec3{0.5f, 0.5f, 0.5f});
+    scene.world.get<Collider>(near).layer = 2;
+    PhysicsWorld physics;
+    physics.settings.useBounds = false;
+    physics.step(scene, 0.0f, nullptr);
+    CHECK_EQ(physics.raycast(Vec3{0, 0, 0}, Vec3{0, 0, 1}, 10.0f).entity, near);
+    CHECK_EQ(physics.raycast(Vec3{0, 0, 0}, Vec3{0, 0, 1}, 10.0f, ~2u).entity, far);
+    std::vector<Entity> found;
+    physics.overlapSphere(Vec3{0, 0, 2.0f}, 1.0f, found, 1u);
+    CHECK(found.empty());
+}

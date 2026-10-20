@@ -41,7 +41,9 @@ struct Collider {
     float sleepTimer = 0.0f;
     uint32_t asleep = 0;
     uint32_t fixedRotation = 0;
-    uint32_t pad = 0;
+    uint32_t sensor = 0;
+    uint32_t layer = 1;
+    uint32_t mask = 0xFFFFFFFFu;
 };
 
 /// Holds two bodies a fixed distance apart, measured between an anchor point

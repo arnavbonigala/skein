@@ -281,6 +281,19 @@ by exactly the velocity it is given, with no gravity, damping or walls, and the
 solver treats it as infinitely heavy, so what it meets gets pushed and it does
 not. Without a `Velocity` the same collider is static.
 
+## Layers, sensors and contact reports
+
+| | |
+|---|---|
+| `layer`, `mask` | a pair collides only when each one's `layer` bits meet the other's `mask`; defaults collide with everything |
+| `sensor` | the pair is tested but never solved; `sensorOverlaps()` lists every sensor and what is inside it after a step |
+| `reportContacts(out, minImpulse)` | one row per touching pair: normal, mean point, deepest depth and the normal impulse summed over its manifold |
+| `raycast(..., layers)`, `overlapSphere(..., layers)` | skip bodies whose `layer` is not in `layers` |
+
+Both lists come out in the same order on every run and on any thread count, so a
+game can drive its rules from them without breaking a replay. A step split for
+fast bodies reports the contacts of its last split.
+
 ## Fixed rotation
 
 A collider with `fixedRotation` set gets zero inverse inertia, so no contact or

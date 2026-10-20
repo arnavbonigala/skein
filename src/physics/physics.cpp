@@ -318,6 +318,8 @@ void PhysicsWorld::gather(Scene& scene) {
     restitution_.resize(n);
     friction_.resize(n);
     kind_.resize(n);
+    filter_.resize(n);
+    sensor_.resize(n);
     sleepTimer_.resize(n);
     asleep_.resize(n);
     reach_.resize(n);
@@ -360,6 +362,8 @@ void PhysicsWorld::gather(Scene& scene) {
         restitution_[m] = c.restitution;
         friction_[m] = c.friction;
         kind_[m] = c.kind;
+        filter_[m] = Filter{c.layer, c.mask};
+        sensor_[m] = c.sensor ? uint8_t{1} : uint8_t{0};
         sleepTimer_[m] = c.sleepTimer;
         // Anything outside physics that gives a sleeper velocity — a script, the
         // editor, a loaded scene — has to wake it, or it hangs wherever it was
@@ -416,6 +420,8 @@ void PhysicsWorld::gather(Scene& scene) {
         restitution_.resize(m);
         friction_.resize(m);
         kind_.resize(m);
+        filter_.resize(m);
+        sensor_.resize(m);
         sleepTimer_.resize(m);
         asleep_.resize(m);
         reach_.resize(m);
@@ -910,9 +916,20 @@ void PhysicsWorld::findContacts(JobSystem* jobs) {
     if (!bruteForce_) {
         contactChunks_.resize(chunks);
         for (auto& c : contactChunks_) c.clear();
+        sensorChunks_.resize(chunks);
+        for (auto& c : sensorChunks_) c.clear();
     }
 
-    auto consider = [&](uint32_t i, uint32_t j, std::vector<Contact>& sink) {
+    auto consider = [&](uint32_t i, uint32_t j, std::vector<Contact>& sink, std::vector<SensorOverlap>& sensed) {
+        if (!(filter_[i].layer & filter_[j].mask) || !(filter_[j].layer & filter_[i].mask)) return;
+        if (sensor_[i] | sensor_[j]) {
+            Contact probe[4];
+            probe[0] = Contact{i, j, Vec3{0, 1, 0}, 0, 0, Vec3{0, 0, 0}, Vec3{0, 0, 0}};
+            if (narrowAll(i, j, probe, 0.0f) == 0 || probe[0].depth < 0.0f) return;
+            if (sensor_[i]) sensed.push_back(SensorOverlap{entity_[i], entity_[j]});
+            if (sensor_[j]) sensed.push_back(SensorOverlap{entity_[j], entity_[i]});
+            return;
+        }
         if (body_[i].invMass <= 0.0f && body_[j].invMass <= 0.0f) return;
         if (asleep_[i] && asleep_[j]) {
             if (!audit) return;
@@ -947,6 +964,7 @@ void PhysicsWorld::findContacts(JobSystem* jobs) {
         contactChunks_.resize(1);
         std::vector<Contact>& sink = contactChunks_[0];
         sink.clear();
+        sensorOverlaps_.clear();
         const uint32_t n = static_cast<uint32_t>(position_.size());
         uint64_t localPairs = 0, localNear = 0;
         for (uint32_t i = 0; i + 1 < n; ++i) {
@@ -958,7 +976,7 @@ void PhysicsWorld::findContacts(JobSystem* jobs) {
                 const float cull = ri + reach_[j] + sweep_[j];
                 if (length2(d) > cull * cull) continue;
                 ++localNear;
-                consider(i, j, sink);
+                consider(i, j, sink, sensorOverlaps_);
             }
         }
         contacts_.swap(sink);
@@ -972,6 +990,7 @@ void PhysicsWorld::findContacts(JobSystem* jobs) {
 
     auto scan = [&](size_t begin, size_t end) {
         std::vector<Contact>& sink = contactChunks_[begin / BUCKET_GRAIN];
+        std::vector<SensorOverlap>& sensed = sensorChunks_[begin / BUCKET_GRAIN];
         uint64_t localPairs = 0, localNear = 0, localDuplicates = 0;
         for (size_t b = begin; b < end; ++b) {
             const uint32_t from = cellStart_[b], to = cellStart_[b + 1];
@@ -1000,7 +1019,7 @@ void PhysicsWorld::findContacts(JobSystem* jobs) {
                             ++localDuplicates;
                             continue;
                         }
-                        consider(i, j, sink);
+                        consider(i, j, sink, sensed);
                     }
                 }
                 runStart = runEnd;
@@ -1018,6 +1037,8 @@ void PhysicsWorld::findContacts(JobSystem* jobs) {
 
     contacts_.clear();
     for (auto& c : contactChunks_) contacts_.insert(contacts_.end(), c.begin(), c.end());
+    sensorOverlaps_.clear();
+    for (auto& c : sensorChunks_) sensorOverlaps_.insert(sensorOverlaps_.end(), c.begin(), c.end());
     stats_.pairsTested = pairs.load();
     stats_.nearPairs = near.load();
     stats_.duplicatePairs = duplicates.load();
@@ -1803,7 +1824,7 @@ bool PhysicsWorld::sphereTouchesBody(uint32_t b, const Vec3& center, float radiu
     return length2(d - clamped) < radius * radius;
 }
 
-RayHit PhysicsWorld::raycast(const Vec3& origin, const Vec3& dir, float maxDistance) const {
+RayHit PhysicsWorld::raycast(const Vec3& origin, const Vec3& dir, float maxDistance, uint32_t layers) const {
     RayHit hit;
     float len = length(dir);
     if (len < 1e-8f || maxDistance <= 0.0f) return hit;
@@ -1811,6 +1832,7 @@ RayHit PhysicsWorld::raycast(const Vec3& origin, const Vec3& dir, float maxDista
     if (bruteForce_) {
         float best = maxDistance;
         for (uint32_t b = 0; b < position_.size(); ++b) {
+            if (!(filter_[b].layer & layers)) continue;
             Vec3 normal;
             float t = rayBody(b, origin, d, normal);
             if (t < 0.0f || t > best) continue;
@@ -1855,6 +1877,7 @@ RayHit PhysicsWorld::raycast(const Vec3& origin, const Vec3& dir, float maxDista
             const GridEntry& e = entries_[i];
             if (e.cell != key) continue;
             const uint32_t b = e.body;
+            if (!(filter_[b].layer & layers)) continue;
             Vec3 normal;
             float t = rayBody(b, origin, d, normal);
             if (t < 0.0f || t > best) continue;
@@ -1883,11 +1906,11 @@ RayHit PhysicsWorld::raycast(const Vec3& origin, const Vec3& dir, float maxDista
     return hit;
 }
 
-void PhysicsWorld::overlapSphere(const Vec3& center, float radius, std::vector<Entity>& out) const {
+void PhysicsWorld::overlapSphere(const Vec3& center, float radius, std::vector<Entity>& out, uint32_t layers) const {
     if (radius <= 0.0f) return;
     if (bruteForce_) {
         for (uint32_t b = 0; b < position_.size(); ++b)
-            if (sphereTouchesBody(b, center, radius)) out.push_back(entity_[b]);
+            if ((filter_[b].layer & layers) && sphereTouchesBody(b, center, radius)) out.push_back(entity_[b]);
         return;
     }
     if (entries_.empty()) return;
@@ -1910,12 +1933,39 @@ void PhysicsWorld::overlapSphere(const Vec3& center, float radius, std::vector<E
                     const GridEntry& e = entries_[i];
                     if (e.cell != key) continue;
                     const uint32_t b = e.body;
-                    if (!sphereTouchesBody(b, center, radius)) continue;
+                    if (!(filter_[b].layer & layers) || !sphereTouchesBody(b, center, radius)) continue;
                     Entity found = entity_[b];
                     if (std::find(out.begin() + static_cast<ptrdiff_t>(first), out.end(), found) == out.end())
                         out.push_back(found);
                 }
             }
+}
+
+void PhysicsWorld::reportContacts(std::vector<ContactReport>& out, float minImpulse) const {
+    std::vector<uint32_t> order(contacts_.size());
+    for (uint32_t k = 0; k < order.size(); ++k) order[k] = k;
+    std::stable_sort(order.begin(), order.end(), [&](uint32_t x, uint32_t y) {
+        const Contact& cx = contacts_[x];
+        const Contact& cy = contacts_[y];
+        return cx.a != cy.a ? cx.a < cy.a : cx.b < cy.b;
+    });
+    for (size_t at = 0; at < order.size();) {
+        const Contact& first = contacts_[order[at]];
+        ContactReport r{entity_[first.a], entity_[first.b], first.normal, Vec3{0, 0, 0}, first.depth, 0.0f, 0};
+        size_t next = at;
+        for (; next < order.size(); ++next) {
+            const uint32_t k = order[next];
+            const Contact& c = contacts_[k];
+            if (c.a != first.a || c.b != first.b) break;
+            r.point += position_[c.a] + c.anchorA;
+            r.depth = std::max(r.depth, c.depth);
+            r.impulse += k < normalImpulse_.size() ? normalImpulse_[k] : 0.0f;
+            ++r.points;
+        }
+        r.point = r.point / static_cast<float>(r.points);
+        if (r.impulse >= minImpulse) out.push_back(r);
+        at = next;
+    }
 }
 
 size_t PhysicsWorld::bytesUsed() const {

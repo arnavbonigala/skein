@@ -101,6 +101,21 @@ struct RayHit {
     Vec3 normal{0, 0, 0};
 };
 
+struct SensorOverlap {
+    Entity sensor = 0;
+    Entity other = 0;
+};
+
+struct ContactReport {
+    Entity a = 0;
+    Entity b = 0;
+    Vec3 normal{0, 1, 0};
+    Vec3 point{0, 0, 0};
+    float depth = 0.0f;
+    float impulse = 0.0f;
+    uint32_t points = 0;
+};
+
 class PhysicsWorld {
 public:
     PhysicsSettings settings;
@@ -110,11 +125,15 @@ public:
     /// Nearest collider along `origin + dir * t` for t in [0, maxDistance],
     /// walked cell by cell through the grid the last step built. `dir` need not
     /// be normalised. Returns a miss when the world has not been stepped yet.
-    RayHit raycast(const Vec3& origin, const Vec3& dir, float maxDistance) const;
+    RayHit raycast(const Vec3& origin, const Vec3& dir, float maxDistance, uint32_t layers = 0xFFFFFFFFu) const;
 
     /// Every collider overlapping the sphere, appended to `out`. Same grid and
     /// same caveat as `raycast`: it answers for the last step's positions.
-    void overlapSphere(const Vec3& center, float radius, std::vector<Entity>& out) const;
+    void overlapSphere(const Vec3& center, float radius, std::vector<Entity>& out,
+                       uint32_t layers = 0xFFFFFFFFu) const;
+
+    const std::vector<SensorOverlap>& sensorOverlaps() const { return sensorOverlaps_; }
+    void reportContacts(std::vector<ContactReport>& out, float minImpulse = 0.0f) const;
 
     const PhysicsStats& stats() const { return stats_; }
     size_t bytesUsed() const;
@@ -221,6 +240,14 @@ private:
     std::vector<uint32_t> slot_;
 
     std::vector<float> reach_;
+    struct Filter {
+        uint32_t layer;
+        uint32_t mask;
+    };
+    std::vector<Filter> filter_;
+    std::vector<uint8_t> sensor_;
+    std::vector<std::vector<SensorOverlap>> sensorChunks_;
+    std::vector<SensorOverlap> sensorOverlaps_;
     std::vector<Vec3> wallReach_;
     struct WallHit {
         uint32_t body;
