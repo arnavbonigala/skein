@@ -12,7 +12,7 @@ bool VideoRecorder::open(const std::string& path, int width, int height, int fps
     close();
     char command[1024];
     const bool prores = path.size() > 4 && path.compare(path.size() - 4, 4, ".mov") == 0;
-    const int megabits = std::max(60, static_cast<int>(static_cast<double>(width) * height * fps * 0.2 / 1e6));
+    const int megabits = std::max(60, static_cast<int>(static_cast<double>(width) * height * fps * 0.15 / 1e6));
     char codec[160];
     if (prores)
         std::snprintf(codec, sizeof(codec), "-c:v prores_videotoolbox -profile:v hq -pix_fmt p210le");
