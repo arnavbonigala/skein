@@ -120,15 +120,21 @@ TEST(primitive_meshes_are_closed_and_correctly_bounded) {
 }
 
 TEST(primitive_winding_is_consistent_and_outward) {
-    MeshData cube = primitives::cube(1.0f);
-    for (size_t i = 0; i + 2 < cube.indices.size(); i += 3) {
-        const Vec3& a = cube.vertices[cube.indices[i]].position;
-        const Vec3& b = cube.vertices[cube.indices[i + 1]].position;
-        const Vec3& c = cube.vertices[cube.indices[i + 2]].position;
-        Vec3 faceNormal = normalize(cross(b - a, c - a));
-        Vec3 stored = cube.vertices[cube.indices[i]].normal;
-        CHECK_NEAR(dot(faceNormal, stored), 1.0, 1e-4);
-        CHECK(dot(faceNormal, (a + b + c) / 3.0f) > 0.0f);
+    MeshData meshes[] = {primitives::cube(1.0f), primitives::sphere(0.5f, 20, 14), primitives::cone(0.5f, 1.0f, 16),
+                         primitives::plane(2.0f, 3)};
+    for (const MeshData& mesh : meshes) {
+        size_t faces = 0;
+        for (size_t i = 0; i + 2 < mesh.indices.size(); i += 3) {
+            const Vertex& a = mesh.vertices[mesh.indices[i]];
+            const Vertex& b = mesh.vertices[mesh.indices[i + 1]];
+            const Vertex& c = mesh.vertices[mesh.indices[i + 2]];
+            Vec3 face = cross(b.position - a.position, c.position - a.position);
+            if (length(face) < 1e-6f) continue;
+            ++faces;
+            CHECK(dot(face, a.normal + b.normal + c.normal) > 0.0f);
+            if (mesh.name != "plane") CHECK(dot(face, (a.position + b.position + c.position) / 3.0f) > 0.0f);
+        }
+        CHECK(faces > 0);
     }
 }
 

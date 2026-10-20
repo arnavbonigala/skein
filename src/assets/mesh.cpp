@@ -72,7 +72,7 @@ MeshData sphere(float radius, int segments, int rings) {
         for (int x = 0; x < segments; ++x) {
             uint32_t a = static_cast<uint32_t>(y * stride + x);
             uint32_t b = static_cast<uint32_t>((y + 1) * stride + x);
-            uint32_t idx[6] = {a, b, a + 1, a + 1, b, b + 1};
+            uint32_t idx[6] = {a, a + 1, b, a + 1, b + 1, b};
             m.indices.insert(m.indices.end(), idx, idx + 6);
         }
     }
@@ -97,7 +97,7 @@ MeshData plane(float size, int subdivisions) {
         for (int x = 0; x < subdivisions; ++x) {
             uint32_t a = static_cast<uint32_t>(y * stride + x);
             uint32_t b = static_cast<uint32_t>((y + 1) * stride + x);
-            uint32_t idx[6] = {a, a + 1, b, b, a + 1, b + 1};
+            uint32_t idx[6] = {a, b, a + 1, b, b + 1, a + 1};
             m.indices.insert(m.indices.end(), idx, idx + 6);
         }
     }
@@ -118,11 +118,11 @@ MeshData cone(float radius, float height, int segments) {
         Vec3 p1{std::cos(t1) * radius, baseY, std::sin(t1) * radius};
         uint32_t base = static_cast<uint32_t>(m.vertices.size());
         m.vertices.push_back(Vertex{apex, Vec3{0, 1, 0}, Vec2{0.5f, 1}});
-        m.vertices.push_back(Vertex{p0, Vec3{0, 1, 0}, Vec2{0, 0}});
         m.vertices.push_back(Vertex{p1, Vec3{0, 1, 0}, Vec2{1, 0}});
+        m.vertices.push_back(Vertex{p0, Vec3{0, 1, 0}, Vec2{0, 0}});
         m.vertices.push_back(Vertex{Vec3{0, baseY, 0}, Vec3{0, -1, 0}, Vec2{0.5f, 0.5f}});
-        m.vertices.push_back(Vertex{p1, Vec3{0, -1, 0}, Vec2{1, 0}});
         m.vertices.push_back(Vertex{p0, Vec3{0, -1, 0}, Vec2{0, 0}});
+        m.vertices.push_back(Vertex{p1, Vec3{0, -1, 0}, Vec2{1, 0}});
         for (uint32_t k = 0; k < 6; ++k) m.indices.push_back(base + k);
     }
     m.recomputeNormals();
