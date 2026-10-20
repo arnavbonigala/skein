@@ -1,3 +1,4 @@
+#include "assets/font.hpp"
 #include "assets/mesh.hpp"
 #include "test.hpp"
 
@@ -197,4 +198,50 @@ TEST(capsule_and_cylinder_are_bounded_and_wound_outward) {
         }
         CHECK(faces > 0);
     }
+}
+
+TEST(font_lays_out_what_it_measures) {
+    std::string path = Font::systemPath();
+    if (path.empty()) {
+        std::printf("    no system font, skipped\n");
+        return;
+    }
+    Font font;
+    std::string error;
+    CHECK(font.load(path, error));
+    CHECK(font.atlasWidth() > 0 && font.atlasHeight() > 0);
+    CHECK_EQ(font.measure("", 32).x, 0.0f);
+    CHECK(font.measure("WWWW", 32).x > font.measure("iiii", 32).x);
+    CHECK_NEAR(font.measure("Ab", 64).x, 2.0f * font.measure("Ab", 32).x, 1e-3);
+
+    Vec2 one = font.measure("line", 20), two = font.measure("line\nlonger line", 20);
+    CHECK_NEAR(two.y, 2.0f * one.y, 1e-4);
+    CHECK_NEAR(two.x, font.measure("longer line", 20).x, 1e-4);
+
+    std::vector<GlyphQuad> quads;
+    font.layout("a b\tc", 100, 50, 32, quads);
+    CHECK_EQ(quads.size(), size_t{4});
+
+    quads.clear();
+    font.layout("Skein", 10, 20, 40, quads);
+    CHECK_EQ(quads.size(), size_t{5});
+    float pad = Font::PADDING * 40 / Font::BAKE_PX;
+    CHECK(quads.front().x0 >= 10 - pad - 1e-3);
+    CHECK(quads.back().x1 <= 10 + font.measure("Skein", 40).x + pad + 1e-3);
+    for (const GlyphQuad& q : quads) {
+        CHECK(q.y0 >= 20 - pad - 1e-3 && q.y1 <= 20 + font.lineHeight(40) + pad);
+        CHECK(q.u0 >= 0 && q.u1 <= 1 && q.v0 >= 0 && q.v1 <= 1 && q.u0 < q.u1 && q.v0 < q.v1);
+    }
+
+    int inside = 0;
+    for (unsigned char v : font.atlas()) inside += v > 128;
+    CHECK(inside > 1000);
+}
+
+TEST(font_rejects_bytes_that_are_not_a_font) {
+    Font font;
+    std::string error;
+    CHECK(!font.loadMemory(std::vector<unsigned char>(256, 7), error));
+    CHECK(!font.loaded());
+    CHECK_EQ(font.measure("x", 10).x, 0.0f);
 }

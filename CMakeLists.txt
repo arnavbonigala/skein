@@ -48,12 +48,14 @@ add_library(skein STATIC
   src/scene/serialize.cpp
   src/assets/mesh.cpp
   src/assets/obj.cpp
+  src/assets/font.cpp
   src/physics/physics.cpp
   src/render/culling.cpp
   src/script/lua_bindings.cpp
 )
 target_include_directories(skein PUBLIC src ${LUA_INCLUDE_DIR})
 target_compile_features(skein PUBLIC cxx_std_20)
+target_include_directories(skein PRIVATE third_party)
 if(SKEIN_PROFILING)
   target_compile_definitions(skein PUBLIC SKEIN_PROFILING=1)
 else()
