@@ -160,6 +160,7 @@ int main(int argc, char** argv) {
     config.ropes = 24;
     int captureFrames = 0;
     const char* recordPath = nullptr;
+    bool showcase = false;
     std::string scriptPath = std::string(SKEIN_ASSET_DIR) + "/scripts/demo.lua";
     for (int i = 1; i < argc; ++i) {
         if (std::strcmp(argv[i], "--entities") == 0 && i + 1 < argc)
@@ -176,6 +177,8 @@ int main(int argc, char** argv) {
             captureFrames = std::atoi(argv[++i]);
         else if (std::strcmp(argv[i], "--record") == 0 && i + 1 < argc)
             recordPath = argv[++i];
+        else if (std::strcmp(argv[i], "--showcase") == 0)
+            showcase = true;
     }
 
     if (!glfwInit()) {
@@ -213,11 +216,24 @@ int main(int argc, char** argv) {
 
     Demo demo;
     Clock::time_point buildStart = Clock::now();
-    demo.build(config, &jobs);
+    if (showcase) {
+        demo.buildShowcase(&jobs);
+        g.camera.position = Vec3{0.0f, 7.0f, 17.0f};
+        g.camera.pitch = -0.36f;
+        g.camera.speed = 8.0f;
+        renderer.options.skyColor = Vec3{0.55f, 0.68f, 0.85f};
+        renderer.options.ambientSky = Vec3{0.32f, 0.38f, 0.48f};
+        renderer.options.ambientGround = Vec3{0.12f, 0.1f, 0.08f};
+        renderer.options.fogDensity = 0.004f;
+        renderer.options.shadowExtent = 20.0f;
+        renderer.options.shadowDistance = 60.0f;
+    } else {
+        demo.build(config, &jobs);
+    }
     double buildMs = millisSince(buildStart);
     renderer.uploadAssets(demo.assets);
 
-    if (config.runScripts && !demo.loadScript(scriptPath, error))
+    if (!showcase && config.runScripts && !demo.loadScript(scriptPath, error))
         std::fprintf(stderr, "script: %s\n", error.c_str());
 
     DebugDraw debug;

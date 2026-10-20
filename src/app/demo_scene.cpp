@@ -5,6 +5,7 @@
 
 #include "core/jobs.hpp"
 #include "core/profiler.hpp"
+#include "core/random.hpp"
 
 namespace skein {
 namespace {
@@ -190,6 +191,101 @@ void Demo::build(const DemoConfig& cfg, JobSystem* jobs) {
     physics.settings.cellSize = 4.0f;
 
     script.bind(&scene, &assets, &physics);
+    scene.updateTransforms(jobs);
+}
+
+void Demo::buildShowcase(JobSystem* jobs) {
+    config = DemoConfig{};
+    config.runScripts = false;
+    fieldMin_ = Vec3{-40, -1, -40};
+    fieldMax_ = Vec3{40, 40, 40};
+    const uint32_t floorMesh = assets.addMesh(primitives::plane(80.0f, 8));
+    const uint32_t ballMesh = assets.addMesh(primitives::sphere(0.5f, 32, 20));
+    const uint32_t beanMesh = assets.addMesh(primitives::capsule(0.4f, 1.6f, 28, 18));
+    const uint32_t boxMesh = assets.addMesh(primitives::cube(1.0f));
+    const uint32_t drumMesh = assets.addMesh(primitives::cylinder(0.6f, 1.2f, 32));
+    const uint32_t floorMaterial = assets.addMaterial(makeMaterial("floor", Vec3{0.62f, 0.6f, 0.57f}, 0.85f, 0.0f));
+    const uint32_t paint = assets.addMaterial(makeMaterial("paint", Vec3{0.9f, 0.9f, 0.9f}, 0.45f, 0.0f));
+    const uint32_t metal = assets.addMaterial(makeMaterial("metal", Vec3{0.8f, 0.8f, 0.82f}, 0.25f, 0.9f));
+    const uint32_t glow = assets.addMaterial(makeMaterial("glow", Vec3{1.0f, 0.6f, 0.2f}, 0.5f, 0.0f, Vec3{4.0f, 1.6f, 0.4f}));
+    const Vec3 palette[8] = {{0.95f, 0.33f, 0.3f}, {0.98f, 0.66f, 0.2f}, {0.98f, 0.88f, 0.3f}, {0.4f, 0.8f, 0.4f},
+                             {0.3f, 0.7f, 0.95f}, {0.5f, 0.45f, 0.95f}, {0.9f, 0.45f, 0.8f}, {0.95f, 0.95f, 0.95f}};
+
+    auto add = [&](const Transform& t, uint32_t mesh, uint32_t material, uint32_t tint) {
+        Entity e = scene.create(t);
+        scene.world.add<Renderable>(e, Renderable{mesh, material, 1, tint});
+        scene.world.add<CullBounds>(e, cullBoundsFor(assets.mesh(mesh).bounds));
+        return e;
+    };
+    auto body = [&](Entity e, ColliderKind kind, Vec3 half, float radius) {
+        scene.world.add<Velocity>(e, Velocity{});
+        Collider c;
+        c.kind = static_cast<uint32_t>(kind);
+        c.halfExtents = half;
+        c.radius = radius;
+        c.restitution = 0.15f;
+        c.friction = 0.6f;
+        scene.world.add<Collider>(e, c);
+    };
+
+    Entity floor = add(Transform{}, floorMesh, floorMaterial, 0);
+    Collider plane;
+    plane.kind = static_cast<uint32_t>(ColliderKind::Plane);
+    scene.world.add<Collider>(floor, plane);
+
+    Random rng(7);
+    for (int i = 0; i < 24; ++i) {
+        Transform t;
+        const float angle = static_cast<float>(i) / 24.0f * 2.0f * PI;
+        t.position = Vec3{std::cos(angle) * 6.0f, 1.0f + rng.unit() * 0.4f, std::sin(angle) * 6.0f};
+        t.rotation = Quat::axisAngle(Vec3{0, 1, 0}, -angle);
+        Entity bean = add(t, beanMesh, paint, packTint(palette[i % 8]));
+        body(bean, ColliderKind::Capsule, Vec3{0, 0.4f, 0}, 0.4f);
+        scene.world.get<Collider>(bean).fixedRotation = 1;
+    }
+    for (int tower = 0; tower < 3; ++tower)
+        for (int level = 0; level < 5; ++level) {
+            Transform t;
+            t.position = Vec3{-3.0f + static_cast<float>(tower) * 3.0f, 0.5f + static_cast<float>(level) * 1.0f, -1.0f};
+            t.rotation = Quat::axisAngle(Vec3{0, 1, 0}, 0.2f * static_cast<float>(level));
+            Entity box = add(t, boxMesh, level % 2 ? metal : paint, level % 2 ? 0 : packTint(palette[(tower + level) % 8]));
+            body(box, ColliderKind::Box, Vec3{0.5f, 0.5f, 0.5f}, 0.5f);
+        }
+    for (int i = 0; i < 40; ++i) {
+        Transform t;
+        t.position = Vec3{rng.uniform(-3.0f, 3.0f), 8.0f + rng.uniform(0.0f, 10.0f), rng.uniform(-2.0f, 3.0f)};
+        Entity ball = add(t, ballMesh, i % 5 == 0 ? glow : paint, i % 5 == 0 ? 0 : packTint(palette[rng.below(8)]));
+        body(ball, ColliderKind::Sphere, Vec3{0.5f, 0.5f, 0.5f}, 0.5f);
+    }
+    for (int i = 0; i < 4; ++i) {
+        Transform t;
+        t.position = Vec3{static_cast<float>(i) * 2.2f - 3.3f, 0.6f, 3.5f};
+        add(t, drumMesh, metal, 0);
+    }
+
+    Transform sunTransform;
+    Entity sun = scene.create(sunTransform);
+    Light sunLight;
+    sunLight.kind = static_cast<uint32_t>(LightKind::Directional);
+    sunLight.direction = normalize(Vec3{-0.5f, -1.0f, -0.35f});
+    sunLight.color = Vec3{1.0f, 0.95f, 0.86f};
+    sunLight.intensity = 3.0f;
+    scene.world.add<Light>(sun, sunLight);
+    const Vec3 lamp[3] = {{1.0f, 0.4f, 0.3f}, {0.3f, 0.6f, 1.0f}, {0.5f, 1.0f, 0.5f}};
+    for (int i = 0; i < 3; ++i) {
+        Transform t;
+        const float angle = static_cast<float>(i) / 3.0f * 2.0f * PI;
+        t.position = Vec3{std::cos(angle) * 8.0f, 2.5f, std::sin(angle) * 8.0f};
+        Entity e = scene.create(t);
+        Light l;
+        l.color = lamp[i];
+        l.intensity = 6.0f;
+        l.range = 12.0f;
+        scene.world.add<Light>(e, l);
+    }
+
+    physics.settings.boundsMin = fieldMin_;
+    physics.settings.boundsMax = fieldMax_;
     scene.updateTransforms(jobs);
 }
 

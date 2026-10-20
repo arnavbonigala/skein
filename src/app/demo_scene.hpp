@@ -42,6 +42,7 @@ public:
     DemoConfig config;
 
     void build(const DemoConfig& cfg, JobSystem* jobs);
+    void buildShowcase(JobSystem* jobs);
     bool loadScript(const std::string& path, std::string& error);
 
     /// Runs scripts, kinematics, physics and the transform hierarchy for one frame.
