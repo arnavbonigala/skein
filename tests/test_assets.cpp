@@ -122,7 +122,7 @@ TEST(primitive_meshes_are_closed_and_correctly_bounded) {
 
 TEST(primitive_winding_is_consistent_and_outward) {
     MeshData meshes[] = {primitives::cube(1.0f), primitives::sphere(0.5f, 20, 14), primitives::cone(0.5f, 1.0f, 16),
-                         primitives::plane(2.0f, 3)};
+                         primitives::plane(2.0f, 3), primitives::icosphere(0.5f, 2)};
     for (const MeshData& mesh : meshes) {
         size_t faces = 0;
         for (size_t i = 0; i + 2 < mesh.indices.size(); i += 3) {
@@ -244,4 +244,26 @@ TEST(font_rejects_bytes_that_are_not_a_font) {
     CHECK(!font.loadMemory(std::vector<unsigned char>(256, 7), error));
     CHECK(!font.loaded());
     CHECK_EQ(font.measure("x", 10).x, 0.0f);
+}
+
+TEST(icosphere_is_round_and_welded) {
+    MeshData m = primitives::icosphere(2.0f, 3);
+    CHECK_EQ(m.vertices.size(), size_t{642});
+    CHECK_EQ(m.indices.size(), size_t{20 * 64 * 3});
+    for (const Vertex& v : m.vertices) CHECK_NEAR(length(v.position), 2.0, 1e-4);
+}
+
+TEST(appended_meshes_carry_their_transform_and_colour) {
+    MeshData into = primitives::cube(1.0f);
+    const size_t before = into.vertices.size();
+    MeshData part = primitives::cube(1.0f);
+    into.append(part, composeTRS(Vec3{5, 0, 0}, Quat::axisAngle(Vec3{0, 1, 0}, PI * 0.5f), Vec3{2, 1, 1}),
+                packColor(Vec3{1, 0, 0}));
+    CHECK_EQ(into.vertices.size(), before * 2);
+    CHECK_EQ(into.indices.back() >= before, true);
+    CHECK_EQ(into.vertices.front().color, 0xFFFFFFFFu);
+    CHECK_EQ(into.vertices.back().color, packColor(Vec3{1, 0, 0}));
+    CHECK_NEAR(into.bounds.max.x, 5.5, 1e-4);
+    CHECK_NEAR(into.bounds.max.z, 1.0, 1e-4);
+    for (size_t i = before; i < into.vertices.size(); ++i) CHECK_NEAR(length(into.vertices[i].normal), 1.0, 1e-4);
 }

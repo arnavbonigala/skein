@@ -1,4 +1,5 @@
 #include "core/math.hpp"
+#include "core/noise.hpp"
 #include "test.hpp"
 
 #include <random>
@@ -182,4 +183,18 @@ TEST(compose_trs_matches_explicit_multiply) {
     Mat4 explicitly = translation(t) * toMat4(q) * scaling(s);
     for (int c = 0; c < 4; ++c)
         for (int r = 0; r < 4; ++r) CHECK_NEAR(composed.m[c][r], explicitly.m[c][r], 1e-5);
+}
+
+TEST(noise_is_smooth_bounded_and_seeded) {
+    float lo = 1, hi = -1;
+    for (int i = 0; i < 2000; ++i) {
+        Vec3 p{i * 0.137f, i * 0.071f, i * 0.029f};
+        float v = noise::fbm(p, 4, 3);
+        lo = std::min(lo, v);
+        hi = std::max(hi, v);
+        CHECK(std::fabs(noise::value(p, 3) - noise::value(p + Vec3{1e-3f, 0, 0}, 3)) < 0.02f);
+    }
+    CHECK(lo >= -1.0f && hi <= 1.0f && hi - lo > 0.5f);
+    CHECK_EQ(noise::value(Vec3{1.5f, 2.5f, 0.5f}, 1), noise::value(Vec3{1.5f, 2.5f, 0.5f}, 1));
+    CHECK(noise::value(Vec3{1.5f, 2.5f, 0.5f}, 1) != noise::value(Vec3{1.5f, 2.5f, 0.5f}, 2));
 }

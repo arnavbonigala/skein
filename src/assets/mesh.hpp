@@ -1,4 +1,5 @@
 #pragma once
+#include <algorithm>
 #include <cstdint>
 #include <string>
 #include <unordered_map>
@@ -14,7 +15,13 @@ struct Vertex {
     Vec3 position;
     Vec3 normal;
     Vec2 uv;
+    uint32_t color = 0xFFFFFFFFu;
 };
+
+inline uint32_t packColor(const Vec3& rgb) {
+    auto channel = [](float v) { return static_cast<uint32_t>(std::clamp(v, 0.0f, 1.0f) * 255.0f + 0.5f); };
+    return channel(rgb.x) | channel(rgb.y) << 8 | channel(rgb.z) << 16 | 0xFF000000u;
+}
 
 struct MeshData {
     std::string name;
@@ -25,6 +32,7 @@ struct MeshData {
     void recomputeBounds();
     /// Area-weighted vertex normals; used when a source file supplies none.
     void recomputeNormals();
+    void append(const MeshData& other, const Mat4& transform, uint32_t color = 0xFFFFFFFFu);
     size_t bytesUsed() const {
         return vertices.capacity() * sizeof(Vertex) + indices.capacity() * sizeof(uint32_t);
     }
@@ -45,6 +53,7 @@ MeshData plane(float size = 1.0f, int subdivisions = 1);
 MeshData cone(float radius = 0.5f, float height = 1.0f, int segments = 20);
 MeshData capsule(float radius = 0.5f, float height = 2.0f, int segments = 24, int rings = 16);
 MeshData cylinder(float radius = 0.5f, float height = 1.0f, int segments = 24);
+MeshData icosphere(float radius = 0.5f, int subdivisions = 2);
 }  // namespace primitives
 
 /// Parses a Wavefront OBJ into a single mesh, merging groups and welding

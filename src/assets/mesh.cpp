@@ -23,7 +23,62 @@ void MeshData::recomputeNormals() {
     for (Vertex& v : vertices) v.normal = normalize(v.normal);
 }
 
+void MeshData::append(const MeshData& other, const Mat4& transform, uint32_t color) {
+    const Mat4 normalMatrix = transpose(inverse(transform));
+    const uint32_t base = static_cast<uint32_t>(vertices.size());
+    for (Vertex v : other.vertices) {
+        Vec4 p = transform * Vec4{v.position.x, v.position.y, v.position.z, 1.0f};
+        Vec4 n = normalMatrix * Vec4{v.normal.x, v.normal.y, v.normal.z, 0.0f};
+        v.position = p.xyz();
+        v.normal = normalize(n.xyz());
+        if (color != 0xFFFFFFFFu) v.color = color;
+        vertices.push_back(v);
+        bounds.expand(v.position);
+    }
+    for (uint32_t i : other.indices) indices.push_back(base + i);
+}
+
 namespace primitives {
+
+MeshData icosphere(float radius, int subdivisions) {
+    MeshData m;
+    m.name = "icosphere";
+    const float t = (1.0f + std::sqrt(5.0f)) * 0.5f;
+    std::vector<Vec3> points = {{-1, t, 0}, {1, t, 0}, {-1, -t, 0}, {1, -t, 0}, {0, -1, t}, {0, 1, t},
+                                {0, -1, -t}, {0, 1, -t}, {t, 0, -1}, {t, 0, 1}, {-t, 0, -1}, {-t, 0, 1}};
+    for (Vec3& p : points) p = normalize(p);
+    std::vector<uint32_t> faces = {0, 11, 5, 0, 5, 1, 0, 1, 7, 0, 7, 10, 0, 10, 11, 1, 5, 9, 5, 11, 4,
+                                   11, 10, 2, 10, 7, 6, 7, 1, 8, 3, 9, 4, 3, 4, 2, 3, 2, 6, 3, 6, 8,
+                                   3, 8, 9, 4, 9, 5, 2, 4, 11, 6, 2, 10, 8, 6, 7, 9, 8, 1};
+    for (int level = 0; level < subdivisions; ++level) {
+        std::unordered_map<uint64_t, uint32_t> midpoints;
+        auto midpoint = [&](uint32_t a, uint32_t b) {
+            uint64_t key = a < b ? (uint64_t{a} << 32 | b) : (uint64_t{b} << 32 | a);
+            auto it = midpoints.find(key);
+            if (it != midpoints.end()) return it->second;
+            points.push_back(normalize(points[a] + points[b]));
+            uint32_t id = static_cast<uint32_t>(points.size() - 1);
+            midpoints.emplace(key, id);
+            return id;
+        };
+        std::vector<uint32_t> next;
+        next.reserve(faces.size() * 4);
+        for (size_t i = 0; i < faces.size(); i += 3) {
+            uint32_t a = faces[i], b = faces[i + 1], c = faces[i + 2];
+            uint32_t ab = midpoint(a, b), bc = midpoint(b, c), ca = midpoint(c, a);
+            next.insert(next.end(), {a, ab, ca, b, bc, ab, c, ca, bc, ab, bc, ca});
+        }
+        faces = std::move(next);
+    }
+    for (const Vec3& p : points) m.vertices.push_back(Vertex{p * radius, p, Vec2{0.5f + std::atan2(p.z, p.x) / (2.0f * PI), 0.5f - std::asin(p.y) / PI}});
+    for (size_t i = 0; i < faces.size(); i += 3) {
+        uint32_t a = faces[i], b = faces[i + 1], c = faces[i + 2];
+        if (dot(cross(points[b] - points[a], points[c] - points[a]), points[a] + points[b] + points[c]) < 0) std::swap(b, c);
+        m.indices.insert(m.indices.end(), {a, b, c});
+    }
+    m.recomputeBounds();
+    return m;
+}
 
 MeshData cube(float size) {
     float h = size * 0.5f;
