@@ -10,6 +10,7 @@
 #include "core/profiler.hpp"
 #include "render/debug_draw.hpp"
 #include "render/gl.hpp"
+#include "render/overlay.hpp"
 #include "render/recorder.hpp"
 #include "render/renderer.hpp"
 #include "scene/serialize.hpp"
@@ -31,6 +32,7 @@ struct AppState {
     Demo* demo = nullptr;
     JobSystem* jobs = nullptr;
     bool vsync = true;
+    bool hud = true;
 };
 
 AppState g;
@@ -44,7 +46,8 @@ void printHelp() {
         "  L      shadows on or off                B      draw cull bounds\n"
         "  C      freeze the culling camera        P      dump the frame profile\n"
         "  V      vsync                            Space bar pause is O\n"
-        "  G      post-processing on or off        --resolution 1920x1080 renders at a fixed size\n"
+        "  G      post-processing on or off        H      heads-up display\n"
+        "  --resolution 1920x1080 renders at a fixed size\n"
         "  F5/F9  save or load scene.skn         --record out.mp4 to capture video\n\n");
 }
 
@@ -87,6 +90,9 @@ void keyCallback(GLFWwindow* window, int key, int scancode, int action, int mods
             break;
         case GLFW_KEY_P:
             std::printf("\n%s\n", Profiler::instance().report().c_str());
+            break;
+        case GLFW_KEY_H:
+            g.hud = !g.hud;
             break;
         case GLFW_KEY_G:
             g.renderer->options.hdr = !g.renderer->options.hdr;
@@ -186,6 +192,25 @@ void handleMovement(GLFWwindow* window, float dt) {
     g.camera.move(delta, dt, boost);
 }
 
+void drawHud(Overlay& overlay, const Renderer& renderer, const Demo& demo) {
+    const RenderStats& s = renderer.stats();
+    const PhysicsStats& p = demo.physics.stats();
+    const float ms = static_cast<float>(Profiler::instance().avgFrameMs());
+    char text[512];
+    std::snprintf(text, sizeof(text),
+                  "%.2f ms cpu   %.2f ms gpu\n%u / %u visible   %u draws\n%u / %u awake   %u contacts",
+                  ms, s.gpuMs, s.visible, s.candidates, s.drawCalls + s.shadowDrawCalls, p.awake, p.bodies,
+                  p.contacts);
+    const float scale = static_cast<float>(renderer.height()) / 1080.0f;
+    const float size = 26.0f * scale, margin = 24.0f * scale, pad = 14.0f * scale;
+    const Vec2 extent = overlay.measure(text, size);
+    overlay.rect(margin, margin, extent.x + 2 * pad, extent.y + 2 * pad, Vec4{0.05f, 0.06f, 0.08f, 0.55f});
+    overlay.text(text, margin + pad, margin + pad, size, Vec4{1.0f, 1.0f, 1.0f, 1.0f});
+    overlay.text("skein", static_cast<float>(renderer.width()) - margin - overlay.measure("skein", 56.0f * scale).x,
+                 margin, 56.0f * scale, Vec4{1.0f, 0.82f, 0.3f, 1.0f}, 4.0f * scale, Vec4{0.1f, 0.06f, 0.02f, 1.0f});
+    overlay.flush(renderer.outputFramebuffer(), renderer.width(), renderer.height());
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -281,6 +306,12 @@ int main(int argc, char** argv) {
 
     DebugDraw debug;
     if (!debug.init(error)) std::fprintf(stderr, "debug draw: %s\n", error.c_str());
+
+    Overlay overlay;
+    if (!overlay.init("", error)) {
+        std::fprintf(stderr, "overlay: %s\n", error.c_str());
+        g.hud = false;
+    }
 
     g.renderer = &renderer;
     g.demo = &demo;
@@ -419,6 +450,8 @@ int main(int argc, char** argv) {
             debug.flush(projection * view);
             glEnable(GL_DEPTH_TEST);
         }
+
+        if (g.hud) drawHud(overlay, renderer, demo);
 
         recorder.capture(renderer.outputFramebuffer());
         renderer.present(windowWidth, windowHeight);
