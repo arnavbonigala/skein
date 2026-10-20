@@ -1379,7 +1379,7 @@ void PhysicsWorld::solveBounds(size_t begin, size_t end, float invDt) {
     for (size_t i = begin; i < end; ++i) {
         if (body_[i].invMass <= 0.0f || asleep_[i]) continue;
         for (int axis = 0; axis < 3; ++axis) {
-            const float r = boundsReach(i, axis);
+            const float r = wallReach_[i][axis];
             const float lo = settings.boundsMin[axis] + r;
             const float hi = settings.boundsMax[axis] - r;
             float depth;
@@ -1485,6 +1485,11 @@ void PhysicsWorld::resolve(float dt, JobSystem* jobs) {
     // by a fraction of a degree inside one step, and the tensor is only used
     // for how hard it is to turn.
     buildInertia(jobs);
+    if (settings.useBounds) {
+        wallReach_.resize(position_.size());
+        for (size_t i = 0; i < position_.size(); ++i)
+            wallReach_[i] = Vec3{boundsReach(i, 0), boundsReach(i, 1), boundsReach(i, 2)};
+    }
     const int substeps = std::max(1, settings.solverSubsteps);
     const float h = dt / static_cast<float>(substeps);
     const float invDt = h > 1e-6f ? 1.0f / h : 0.0f;
@@ -1568,7 +1573,7 @@ void PhysicsWorld::resolve(float dt, JobSystem* jobs) {
         for (size_t i = begin; i < end; ++i) {
             if (body_[i].invMass <= 0.0f) continue;
             for (int axis = 0; axis < 3; ++axis) {
-                const float r = boundsReach(i, axis);
+                const float r = wallReach_[i][axis];
                 float lo = settings.boundsMin[axis] + r;
                 float hi = settings.boundsMax[axis] - r;
                 if (position_[i][axis] < lo) {

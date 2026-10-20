@@ -220,6 +220,7 @@ private:
     std::vector<uint32_t> slot_;
 
     std::vector<float> reach_;
+    std::vector<Vec3> wallReach_;
     std::vector<uint32_t> cursor_;
     bool bruteForce_ = false;
     std::vector<int32_t> bodyLo_;
