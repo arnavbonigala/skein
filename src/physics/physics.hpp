@@ -144,6 +144,7 @@ private:
     void colorContacts();
     void prepareContacts(JobSystem* jobs);
     void solveRange(uint32_t begin, uint32_t end, bool positional, float invDt);
+    void findWallHits();
     void solveBounds(size_t begin, size_t end, float invDt);
     float boundsReach(size_t i, int axis) const;
     void warmStart(uint32_t begin, uint32_t end);
@@ -221,6 +222,11 @@ private:
 
     std::vector<float> reach_;
     std::vector<Vec3> wallReach_;
+    struct WallHit {
+        uint32_t body;
+        uint32_t mask;
+    };
+    std::vector<WallHit> wallHits_;
     std::vector<uint32_t> cursor_;
     bool bruteForce_ = false;
     std::vector<int32_t> bodyLo_;

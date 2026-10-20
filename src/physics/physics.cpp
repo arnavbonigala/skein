@@ -1374,24 +1374,39 @@ float PhysicsWorld::boundsReach(size_t i, int axis) const {
            std::abs(ax[2][axis]) * halfExtent_[i].z;
 }
 
-void PhysicsWorld::solveBounds(size_t begin, size_t end, float invDt) {
-    const float friction = settings.friction;
-    for (size_t i = begin; i < end; ++i) {
+void PhysicsWorld::findWallHits() {
+    wallHits_.clear();
+    for (size_t i = 0; i < position_.size(); ++i) {
         if (body_[i].invMass <= 0.0f || asleep_[i]) continue;
+        uint32_t mask = 0;
         for (int axis = 0; axis < 3; ++axis) {
             const float r = wallReach_[i][axis];
-            const float lo = settings.boundsMin[axis] + r;
-            const float hi = settings.boundsMax[axis] - r;
+            if (position_[i][axis] < settings.boundsMin[axis] + r)
+                mask |= 1u << (axis * 2);
+            else if (position_[i][axis] > settings.boundsMax[axis] - r)
+                mask |= 2u << (axis * 2);
+        }
+        if (mask) wallHits_.push_back(WallHit{static_cast<uint32_t>(i), mask});
+    }
+}
+
+void PhysicsWorld::solveBounds(size_t begin, size_t end, float invDt) {
+    const float friction = settings.friction;
+    for (size_t h = begin; h < end; ++h) {
+        const size_t i = wallHits_[h].body;
+        const uint32_t mask = wallHits_[h].mask;
+        for (int axis = 0; axis < 3; ++axis) {
+            const uint32_t side = (mask >> (axis * 2)) & 3u;
+            if (!side) continue;
+            const float r = wallReach_[i][axis];
             float depth;
             float sign;
-            if (position_[i][axis] < lo) {
-                depth = lo - position_[i][axis];
+            if (side == 1u) {
+                depth = settings.boundsMin[axis] + r - position_[i][axis];
                 sign = 1.0f;
-            } else if (position_[i][axis] > hi) {
-                depth = position_[i][axis] - hi;
-                sign = -1.0f;
             } else {
-                continue;
+                depth = position_[i][axis] - (settings.boundsMax[axis] - r);
+                sign = -1.0f;
             }
             float vn = body_[i].v[axis] * sign;
             if (vn < 0.0f) {
@@ -1535,13 +1550,14 @@ void PhysicsWorld::resolve(float dt, JobSystem* jobs) {
       // contact is fixed for the whole substep and is worth deriving once.
       prepareContacts(jobs);
       integrateVelocities(h, jobs);
+      if (settings.useBounds) findWallHits();
       for (int iter = 0; iter < std::max(1, settings.solverIterations); ++iter) {
         const bool positional = true;
         if (settings.useBounds) {
-            if (jobs && position_.size() >= 8192)
-                jobs->parallelFor(position_.size(), 4096, [&](size_t lo, size_t hi) { solveBounds(lo, hi, invDt); });
+            if (jobs && wallHits_.size() >= 8192)
+                jobs->parallelFor(wallHits_.size(), 4096, [&](size_t lo, size_t hi) { solveBounds(lo, hi, invDt); });
             else
-                solveBounds(0, position_.size(), invDt);
+                solveBounds(0, wallHits_.size(), invDt);
         }
         for (uint32_t color = 0; color < colorCount_; ++color) {
             uint32_t begin = colorStart_[color];
