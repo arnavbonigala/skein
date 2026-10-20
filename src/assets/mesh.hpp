@@ -44,6 +44,7 @@ struct Material {
     Vec3 emissive{0, 0, 0};
     float metallic = 0.0f;
     float wind = 0.0f;
+    float ink = 1.0f;
     std::string name;
 };
 

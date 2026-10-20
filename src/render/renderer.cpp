@@ -144,6 +144,7 @@ void Renderer::drawList(const RenderList& list, const Assets& assets, Shader& sh
             shader.setFloat("uRoughness", mat.roughness);
             shader.setFloat("uMetallic", mat.metallic);
             shader.setFloat("uWind", mat.wind);
+            shader.setFloat("uInk", mat.ink);
         }
         if (options.instancing) {
             mesh.drawInstanced(instanceBase + batch.first, batch.count);

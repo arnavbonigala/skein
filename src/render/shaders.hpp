@@ -56,6 +56,7 @@ uniform vec3 uAlbedo;
 uniform vec3 uEmissive;
 uniform float uRoughness;
 uniform float uMetallic;
+uniform float uInk;
 
 uniform vec3 uSunDirection;
 uniform vec3 uSunColor;
@@ -105,7 +106,7 @@ float shadowFactor(vec3 normal, vec3 lightDir) {
 
 vec3 shade(vec3 normal, vec3 view, vec3 lightDir, vec3 radiance, vec3 albedo, float gloss) {
     float ndl = max(dot(normal, lightDir), 0.0);
-    float cel = smoothstep(0.0, 0.05, ndl) * 0.7 + smoothstep(0.5, 0.56, ndl) * 0.3;
+    float cel = smoothstep(0.0, 0.1, ndl) * 0.72 + smoothstep(0.5, 0.6, ndl) * 0.28;
     ndl = mix(ndl, cel, uToon);
     vec3 halfway = normalize(lightDir + view);
     float spec = pow(max(dot(normal, halfway), 0.0), gloss) * (gloss + 8.0) / 25.0;
@@ -139,7 +140,8 @@ void main() {
     float hemi = normal.y * 0.5 + 0.5;
     color += albedo * mix(uAmbientGround, uAmbientSky, hemi);
     float facing = 1.0 - max(dot(normal, view), 0.0);
-    float rim = smoothstep(0.55, 0.75, facing) * (0.35 + 0.65 * lit * max(dot(normal, sunDir) + 0.4, 0.0));
+    float rim = smoothstep(0.55, 0.75, facing) * (0.35 + 0.65 * lit * max(dot(normal, sunDir) + 0.4, 0.0))
+        * clamp(1.0 - normal.y, 0.0, 1.0);
     color += uRim * rim * mix(albedo, vec3(1.0), 0.5) * uSunColor;
     color += uEmissive;
 
@@ -147,7 +149,7 @@ void main() {
     color = mix(color, skyColor(-view), clamp(fog, 0.0, 1.0));
 
     if (uHdr != 0) {
-        fragColor = vec4(color, 1.0);
+        fragColor = vec4(color, uInk);
         return;
     }
     color = color / (color + vec3(1.0));

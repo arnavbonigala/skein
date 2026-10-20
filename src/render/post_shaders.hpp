@@ -212,7 +212,9 @@ void main() {
         float w = 1.0 / linearDepth(vUv - vec2(0.0, o.y));
         float c = 1.0 / d;
         float curve = (abs(l + r - 2.0 * c) + abs(u + w - 2.0 * c)) * d;
-        float edge = smoothstep(uOutlineLow, uOutlineHigh, curve);
+        float ink = min(texture(uHdr, vUv).a, min(min(texture(uHdr, vUv - vec2(o.x, 0.0)).a, texture(uHdr, vUv + vec2(o.x, 0.0)).a),
+                                                  min(texture(uHdr, vUv + vec2(0.0, o.y)).a, texture(uHdr, vUv - vec2(0.0, o.y)).a)));
+        float edge = smoothstep(uOutlineLow, uOutlineHigh, curve) * clamp(ink, 0.0, 1.0);
         color = mix(color, uOutlineColor, edge * uOutline);
     }
     color *= uExposure;

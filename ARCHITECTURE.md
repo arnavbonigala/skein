@@ -179,7 +179,10 @@ bands and the shadow edge into a hard step, `rim` adds a sunlit edge, and
 `skyGradient` draws a zenith-to-horizon sky after opaque geometry, at the far
 plane, so it only shades pixels nothing covered. Fog fades distant geometry to
 that sky in the view direction, so hills melt into the horizon. A material's
-`wind` sways vertices by the square of their height above the mesh origin.
+`wind` sways vertices by the square of their height above the mesh origin. A material's `ink` goes out
+in the scene alpha, and the outline pass takes the smallest value under its
+kernel, so grass and flowers can stay unlined while the ground around them is
+still inked.
 
 ### Post-processing
 
