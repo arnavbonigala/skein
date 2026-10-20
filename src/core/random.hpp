@@ -68,8 +68,10 @@ public:
     }
 
     Random split() {
-        uint64_t seed = static_cast<uint64_t>(next()) << 32 | next();
-        uint64_t stream = static_cast<uint64_t>(next()) << 32 | next();
+        uint64_t seed = static_cast<uint64_t>(next()) << 32;
+        seed |= next();
+        uint64_t stream = static_cast<uint64_t>(next()) << 32;
+        stream |= next();
         return Random(seed, stream);
     }
 
