@@ -92,6 +92,7 @@ target_link_libraries(skein_bench PRIVATE skein_app)
 add_executable(skein_tests
   tests/test_main.cpp
   tests/test_math.cpp
+  tests/test_random.cpp
   tests/test_ecs.cpp
   tests/test_jobs.cpp
   tests/test_physics.cpp
