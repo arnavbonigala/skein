@@ -84,6 +84,16 @@ struct CullBounds {
     uint32_t pad = 0;
 };
 
+inline CullBounds cullBoundsFor(const AABB& b) {
+    CullBounds cb;
+    cb.localCenter = b.center();
+    cb.localExtent = b.extent();
+    cb.center = cb.localCenter;
+    cb.extent = cb.localExtent;
+    cb.radius = length(cb.extent);
+    return cb;
+}
+
 enum class LightKind : uint32_t { Directional = 0, Point = 1 };
 
 struct Light {

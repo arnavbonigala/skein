@@ -95,14 +95,7 @@ void Demo::build(const DemoConfig& cfg, JobSystem* jobs) {
             uint32_t material = static_cast<uint32_t>(rng() % assets.materialCount());
             scene.world.add<Renderable>(e, Renderable{mesh, material, 1, 0});
 
-            CullBounds cb;
-            const AABB& b = assets.mesh(mesh).bounds;
-            cb.localCenter = b.center();
-            cb.localExtent = b.extent();
-            cb.center = cb.localCenter;
-            cb.extent = cb.localExtent;
-            cb.radius = length(cb.extent);
-            scene.world.add<CullBounds>(e, cb);
+            scene.world.add<CullBounds>(e, cullBoundsFor(assets.mesh(mesh).bounds));
             renderables.push_back(e);
         }
 
@@ -126,14 +119,7 @@ void Demo::build(const DemoConfig& cfg, JobSystem* jobs) {
         Entity child = scene.create(t, parent);
         uint32_t mesh = meshIds_[static_cast<size_t>(rng() % meshIds_.size())];
         scene.world.add<Renderable>(child, Renderable{mesh, static_cast<uint32_t>(rng() % assets.materialCount()), 1, 0});
-        CullBounds cb;
-        const AABB& b = assets.mesh(mesh).bounds;
-        cb.localCenter = b.center();
-        cb.localExtent = b.extent();
-        cb.center = cb.localCenter;
-        cb.extent = cb.localExtent;
-        cb.radius = length(cb.extent);
-        scene.world.add<CullBounds>(child, cb);
+        scene.world.add<CullBounds>(child, cullBoundsFor(assets.mesh(mesh).bounds));
     }
 
     Transform sunTransform;

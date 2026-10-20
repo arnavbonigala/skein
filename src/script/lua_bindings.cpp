@@ -96,16 +96,9 @@ int l_spawn(lua_State* L) {
         uint32_t material = static_cast<uint32_t>(optNumberField(L, 1, "material", 0.0f));
         if (hasMesh) {
             scene->world.add<Renderable>(e, Renderable{mesh, material, 1, 0});
-            CullBounds cb;
-            if (h.assets() && mesh < h.assets()->meshCount()) {
-                const AABB& b = h.assets()->mesh(mesh).bounds;
-                cb.localCenter = b.center();
-                cb.localExtent = b.extent();
-            }
-            cb.center = cb.localCenter;
-            cb.extent = cb.localExtent;
-            cb.radius = length(cb.extent);
-            scene->world.add<CullBounds>(e, cb);
+            AABB b{Vec3{-0.5f, -0.5f, -0.5f}, Vec3{0.5f, 0.5f, 0.5f}};
+            if (h.assets() && mesh < h.assets()->meshCount()) b = h.assets()->mesh(mesh).bounds;
+            scene->world.add<CullBounds>(e, cullBoundsFor(b));
         }
 
         lua_getfield(L, 1, "velocity");
