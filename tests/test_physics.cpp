@@ -2,6 +2,7 @@
 #include "test.hpp"
 
 #include <algorithm>
+#include <cstring>
 #include <random>
 #include <set>
 
@@ -1251,4 +1252,69 @@ TEST(a_fixed_rotation_body_keeps_its_orientation_through_an_off_centre_hit) {
             CHECK(drift < 0.9999f);
         }
     }
+}
+
+namespace {
+
+void buildDeterminismPile(Scene& scene, int count) {
+    std::mt19937 rng(77);
+    std::uniform_real_distribution<float> planar(-12.0f, 12.0f);
+    std::uniform_real_distribution<float> height(0.5f, 30.0f);
+    std::uniform_real_distribution<float> unit(0.0f, 1.0f);
+    Entity previous = NULL_ENTITY;
+    for (int i = 0; i < count; ++i) {
+        Transform t;
+        t.position = Vec3{planar(rng), height(rng), planar(rng)};
+        t.rotation = Quat::euler(unit(rng) * PI, unit(rng) * PI, 0.0f);
+        Entity e = scene.create(t);
+        scene.world.add<Velocity>(e, Velocity{Vec3{unit(rng) - 0.5f, 0, unit(rng) - 0.5f}, Vec3{0, 0, 0}});
+        Collider c;
+        c.kind = static_cast<uint32_t>(i % 3 == 0 ? ColliderKind::Box : ColliderKind::Sphere);
+        c.radius = 0.3f + unit(rng) * 0.3f;
+        c.halfExtents = Vec3{0.3f, 0.3f, 0.3f} + Vec3{unit(rng), unit(rng), unit(rng)} * 0.3f;
+        c.restitution = unit(rng) * 0.5f;
+        scene.world.add<Collider>(e, c);
+        if (i % 50 == 1 && previous != NULL_ENTITY) {
+            Joint j;
+            j.other = previous;
+            j.length = 1.0f;
+            scene.world.add<Joint>(e, j);
+        }
+        previous = e;
+    }
+}
+
+std::vector<float> snapshot(Scene& scene) {
+    std::vector<float> out;
+    forEach<Transform>(scene.world, [&](Entity, Transform& t) {
+        out.insert(out.end(), {t.position.x, t.position.y, t.position.z, t.rotation.x, t.rotation.y, t.rotation.z,
+                               t.rotation.w});
+    });
+    return out;
+}
+
+std::vector<float> runPile(JobSystem* jobs, int count, int steps) {
+    Scene scene;
+    buildDeterminismPile(scene, count);
+    PhysicsWorld physics;
+    physics.settings.boundsMin = Vec3{-14, 0, -14};
+    physics.settings.boundsMax = Vec3{14, 60, 14};
+    for (int i = 0; i < steps; ++i) physics.step(scene, 1.0f / 60.0f, jobs);
+    return snapshot(scene);
+}
+
+bool bitwiseEqual(const std::vector<float>& a, const std::vector<float>& b) {
+    return a.size() == b.size() && std::memcmp(a.data(), b.data(), a.size() * sizeof(float)) == 0;
+}
+
+}  // namespace
+
+TEST(the_same_scene_steps_to_the_same_bits_serial_threaded_and_again) {
+    const int count = 12000, steps = 90;
+    std::vector<float> serial = runPile(nullptr, count, steps);
+    JobSystem jobs(7);
+    std::vector<float> threaded = runPile(&jobs, count, steps);
+    std::vector<float> again = runPile(nullptr, count, steps);
+    CHECK(bitwiseEqual(serial, again));
+    CHECK(bitwiseEqual(serial, threaded));
 }

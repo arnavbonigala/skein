@@ -130,9 +130,11 @@ int clipFace(const BoxRef& ref, int refAxis, float refSign, const BoxRef& inc, f
     // is what a point is called next frame too, however far the pair has crept,
     // so the impulse it accumulated finds it again.
     uint32_t tag[8] = {0, 1, 2, 3};
+    uint32_t edge[8] = {0, 1, 2, 3};
     int count = 4;
     Vec3 scratch[8];
     uint32_t scratchTag[8];
+    uint32_t scratchEdge[8];
 
     const int ru = (refAxis + 1) % 3, rv = (refAxis + 2) % 3;
     const int sideAxis[4] = {ru, ru, rv, rv};
@@ -148,10 +150,13 @@ int clipFace(const BoxRef& ref, int refAxis, float refSign, const BoxRef& inc, f
             const float db = dot(b, n) - limit;
             if (da <= 0.0f) {
                 scratchTag[out] = tag[i];
+                scratchEdge[out] = edge[i];
                 scratch[out++] = a;
             }
             if ((da < 0.0f) != (db < 0.0f) && out < 8) {
-                scratchTag[out] = 4u + static_cast<uint32_t>(plane) * 4u + (tag[i] & 3u);
+                const uint32_t line = edge[i] < 4u ? edge[i] : 16u + (edge[i] - 4u);
+                scratchTag[out] = 4u + static_cast<uint32_t>(plane) * 32u + line;
+                scratchEdge[out] = da <= 0.0f ? 4u + static_cast<uint32_t>(plane) : edge[i];
                 scratch[out++] = a + (b - a) * (da / (da - db));
             }
             if (out >= 8) break;
@@ -160,6 +165,7 @@ int clipFace(const BoxRef& ref, int refAxis, float refSign, const BoxRef& inc, f
         for (int i = 0; i < count; ++i) {
             poly[i] = scratch[i];
             tag[i] = scratchTag[i];
+            edge[i] = scratchEdge[i];
         }
     }
 
@@ -187,16 +193,18 @@ int clipFace(const BoxRef& ref, int refAxis, float refSign, const BoxRef& inc, f
     pick[1] = pick[0];
     float far = -1.0f;
     for (int i = 0; i < kept; ++i) {
+        if (i == pick[0]) continue;
         float d = length2(points[i] - points[pick[0]]);
         if (d <= far) continue;
         far = d;
         pick[1] = i;
     }
-    const Vec3 edge = points[pick[1]] - points[pick[0]];
+    const Vec3 span = points[pick[1]] - points[pick[0]];
     pick[2] = pick[0];
     float widest = -1.0f;
     for (int i = 0; i < kept; ++i) {
-        float area = length2(cross(edge, points[i] - points[pick[0]]));
+        if (i == pick[0] || i == pick[1]) continue;
+        float area = length2(cross(span, points[i] - points[pick[0]]));
         if (area <= widest) continue;
         widest = area;
         pick[2] = i;
