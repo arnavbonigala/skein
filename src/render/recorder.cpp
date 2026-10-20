@@ -1,5 +1,7 @@
 #include "render/recorder.hpp"
 
+#include <algorithm>
+
 #include "render/gl.hpp"
 
 namespace skein {
@@ -9,10 +11,16 @@ VideoRecorder::~VideoRecorder() { close(); }
 bool VideoRecorder::open(const std::string& path, int width, int height, int fps, std::string& error) {
     close();
     char command[1024];
+    const bool prores = path.size() > 4 && path.compare(path.size() - 4, 4, ".mov") == 0;
+    const int megabits = std::max(60, static_cast<int>(static_cast<double>(width) * height * fps * 0.2 / 1e6));
+    char codec[160];
+    if (prores)
+        std::snprintf(codec, sizeof(codec), "-c:v prores_videotoolbox -profile:v hq -pix_fmt p210le");
+    else
+        std::snprintf(codec, sizeof(codec), "-c:v h264_videotoolbox -b:v %dM -pix_fmt yuv420p", megabits);
     std::snprintf(command, sizeof(command),
-                  "ffmpeg -loglevel error -y -f rawvideo -pix_fmt rgba -s %dx%d -r %d -i - -vf vflip "
-                  "-c:v h264_videotoolbox -b:v 60M -pix_fmt yuv420p \"%s\"",
-                  width, height, fps, path.c_str());
+                  "ffmpeg -loglevel error -y -f rawvideo -pix_fmt rgba -s %dx%d -r %d -i - -vf vflip %s \"%s\"",
+                  width, height, fps, codec, path.c_str());
     pipe_ = popen(command, "w");
     if (!pipe_) {
         error = "could not start ffmpeg";
