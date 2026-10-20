@@ -825,7 +825,7 @@ TEST(a_turned_box_is_tested_as_the_box_it_is_and_not_as_its_extent) {
     auto contactsAt = [](bool rotatedBoxes) {
         Scene scene;
         spawnBox(scene, Vec3{0, 0, 0}, Quat::axisAngle(Vec3{0, 1, 0}, PI * 0.25f), Vec3{1, 1, 1}, 0.0f);
-        spawnSphere(scene, Vec3{0.95f, 0, 0.95f}, Vec3{0, 0, 0}, 0.2f, 0.0f);
+        spawnSphere(scene, Vec3{0.95f, 0, 0.95f}, Vec3{0, 0, 0}, 0.2f, 1.0f);
         PhysicsWorld physics;
         physics.settings.gravity = Vec3{0, 0, 0};
         physics.settings.useBounds = false;
@@ -1317,4 +1317,84 @@ TEST(the_same_scene_steps_to_the_same_bits_serial_threaded_and_again) {
     std::vector<float> again = runPile(nullptr, count, steps);
     CHECK(bitwiseEqual(serial, again));
     CHECK(bitwiseEqual(serial, threaded));
+}
+
+TEST(the_brute_force_broadphase_finds_what_the_grid_finds) {
+    for (int trial = 0; trial < 4; ++trial) {
+        auto build = [&](Scene& scene) {
+            std::mt19937 rng(static_cast<unsigned>(100 + trial));
+            std::uniform_real_distribution<float> p(-4.0f, 4.0f);
+            std::uniform_real_distribution<float> unit(0.0f, 1.0f);
+            for (int i = 0; i < 60; ++i) {
+                Transform t;
+                t.position = Vec3{p(rng), p(rng) + 4.0f, p(rng)};
+                t.rotation = Quat::euler(unit(rng) * PI, unit(rng) * PI, 0.0f);
+                Entity e = scene.create(t);
+                scene.world.add<Velocity>(e, Velocity{Vec3{unit(rng) - 0.5f, 0, 0}, Vec3{0, 0, 0}});
+                Collider c;
+                c.kind = static_cast<uint32_t>(i % 2 ? ColliderKind::Box : ColliderKind::Sphere);
+                c.radius = 0.4f + unit(rng) * 0.4f;
+                c.halfExtents = Vec3{0.4f, 0.3f, 0.5f};
+                c.invMass = i % 7 == 0 ? 0.0f : 1.0f;
+                scene.world.add<Collider>(e, c);
+            }
+        };
+        Scene a, b;
+        build(a);
+        build(b);
+        PhysicsWorld grid, brute;
+        grid.settings.bruteForceBelow = 0;
+        brute.settings.bruteForceBelow = 1000;
+        uint32_t gridContacts = grid.step(a, 0.0f, nullptr).contacts;
+        uint32_t bruteContacts = brute.step(b, 0.0f, nullptr).contacts;
+        CHECK(gridContacts > 10u);
+        CHECK_EQ(gridContacts, bruteContacts);
+        CHECK(grid.stats().gridCells > 0u);
+        CHECK_EQ(brute.stats().gridCells, 0u);
+    }
+}
+
+TEST(queries_answer_the_same_with_or_without_the_grid) {
+    auto build = [](Scene& scene) {
+        std::mt19937 rng(21);
+        std::uniform_real_distribution<float> p(-6.0f, 6.0f);
+        for (int i = 0; i < 40; ++i) {
+            Transform t;
+            t.position = Vec3{p(rng), p(rng) + 8.0f, p(rng)};
+            Entity e = scene.create(t);
+            Collider c;
+            c.kind = static_cast<uint32_t>(i % 3 == 0 ? ColliderKind::Box : ColliderKind::Sphere);
+            c.invMass = 0.0f;
+            scene.world.add<Collider>(e, c);
+        }
+    };
+    Scene a, b;
+    build(a);
+    build(b);
+    PhysicsWorld grid, brute;
+    grid.settings.bruteForceBelow = 0;
+    brute.settings.bruteForceBelow = 1000;
+    grid.step(a, 0.0f, nullptr);
+    brute.step(b, 0.0f, nullptr);
+    std::mt19937 rng(5);
+    std::uniform_real_distribution<float> p(-8.0f, 8.0f);
+    int hits = 0;
+    for (int i = 0; i < 300; ++i) {
+        Vec3 origin{p(rng), p(rng) + 8.0f, p(rng)};
+        Vec3 dir{p(rng), p(rng), p(rng)};
+        RayHit g = grid.raycast(origin, dir, 30.0f);
+        RayHit f = brute.raycast(origin, dir, 30.0f);
+        CHECK_EQ(g.hit, f.hit);
+        if (!g.hit) continue;
+        ++hits;
+        CHECK_EQ(g.entity, f.entity);
+        CHECK_NEAR(g.distance, f.distance, 1e-5);
+        std::vector<Entity> go, fo;
+        grid.overlapSphere(origin, 2.5f, go);
+        brute.overlapSphere(origin, 2.5f, fo);
+        std::sort(go.begin(), go.end());
+        std::sort(fo.begin(), fo.end());
+        CHECK(go == fo);
+    }
+    CHECK(hits > 20);
 }

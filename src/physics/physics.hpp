@@ -64,6 +64,7 @@ struct PhysicsSettings {
     /// cancels it right back.
     float sleepSpeed = 0.3f;
     float sleepTime = 0.6f;
+    uint32_t bruteForceBelow = 64;
 };
 
 struct PhysicsStats {
@@ -156,6 +157,8 @@ private:
     void resolve(float dt, JobSystem* jobs);
     void updateSleep(float dt, JobSystem* jobs);
     void scatter(Scene& scene, JobSystem* jobs);
+    float rayBody(uint32_t b, const Vec3& origin, const Vec3& dir, Vec3& normal) const;
+    bool sphereTouchesBody(uint32_t b, const Vec3& center, float radius) const;
 
     /// Everything an impulse needs about one body, in one 64-byte record. The
     /// solver reads two of these per contact at indices the contact list does
@@ -217,6 +220,8 @@ private:
     std::vector<uint32_t> slot_;
 
     std::vector<float> reach_;
+    std::vector<uint32_t> cursor_;
+    bool bruteForce_ = false;
     std::vector<int32_t> bodyLo_;
     std::vector<int32_t> bodyHi_;
     std::vector<uint32_t> entryOffset_;

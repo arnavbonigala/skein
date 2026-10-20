@@ -675,6 +675,13 @@ void PhysicsWorld::buildGrid(JobSystem* jobs) {
     else
         classify(0, n);
 
+    bruteForce_ = n < settings.bruteForceBelow;
+    if (bruteForce_) {
+        stats_.gridCells = 0;
+        stats_.gridEntries = 0;
+        return;
+    }
+
     entryOffset_[0] = 0;
     for (size_t i = 0; i < n; ++i) entryOffset_[i + 1] += entryOffset_[i];
     const uint32_t entries = entryOffset_[n];
@@ -708,7 +715,8 @@ void PhysicsWorld::buildGrid(JobSystem* jobs) {
     // sorted entry array, so rejecting a candidate never touches the body
     // arrays at all.
     entries_.resize(entries);
-    std::vector<uint32_t> cursor(cellStart_.begin(), cellStart_.end() - 1);
+    cursor_.assign(cellStart_.begin(), cellStart_.end() - 1);
+    std::vector<uint32_t>& cursor = cursor_;
     for (size_t i = 0; i < n; ++i) {
         GridEntry e;
         e.x = position_[i].x;
@@ -897,10 +905,70 @@ void PhysicsWorld::findContacts(JobSystem* jobs) {
     // is guaranteed to meet in at least one shared cell. Reporting only from
     // the lowest shared cell keeps each pair unique without a visited set.
     const bool audit = (frame_ % kSleepAudit) == 0;
-    const uint32_t buckets = bucketMask_ + 1;
+    const uint32_t buckets = bruteForce_ ? 0 : bucketMask_ + 1;
     const size_t chunks = buckets == 0 ? 0 : (buckets + BUCKET_GRAIN - 1) / BUCKET_GRAIN;
-    contactChunks_.resize(chunks);
-    for (auto& c : contactChunks_) c.clear();
+    if (!bruteForce_) {
+        contactChunks_.resize(chunks);
+        for (auto& c : contactChunks_) c.clear();
+    }
+
+    auto consider = [&](uint32_t i, uint32_t j, std::vector<Contact>& sink) {
+        if (body_[i].invMass <= 0.0f && body_[j].invMass <= 0.0f) return;
+        if (asleep_[i] && asleep_[j]) {
+            if (!audit) return;
+            Contact probe[4];
+            probe[0] = Contact{i, j, Vec3{0, 1, 0}, 0, 0, Vec3{0, 0, 0}, Vec3{0, 0, 0}};
+            if (narrowAll(i, j, probe, 0.0f) > 0 && probe[0].depth > kSleepDepth) {
+                std::atomic_ref<uint8_t>(asleep_[i]).store(0, std::memory_order_relaxed);
+                std::atomic_ref<uint8_t>(asleep_[j]).store(0, std::memory_order_relaxed);
+                sleepTimer_[i] = 0.0f;
+                sleepTimer_[j] = 0.0f;
+            }
+            return;
+        }
+        Contact manifold[4];
+        manifold[0] = Contact{i, j, Vec3{0, 1, 0}, 0, 0, Vec3{0, 0, 0}, Vec3{0, 0, 0}};
+        int found = narrowAll(i, j, manifold, motion_[i] + motion_[j] + kManifoldSkin);
+        if (found == 0) return;
+        const Contact& contact = manifold[0];
+        const bool deep = contact.depth > kWakeDepth;
+        if (asleep_[i] && (deep || length2(body_[j].v) > wakeSpeed2))
+            std::atomic_ref<uint8_t>(asleep_[i]).store(0, std::memory_order_relaxed);
+        if (asleep_[j] && (deep || length2(body_[i].v) > wakeSpeed2))
+            std::atomic_ref<uint8_t>(asleep_[j]).store(0, std::memory_order_relaxed);
+        for (int m = 0; m < found; ++m) {
+            manifold[m].anchorB = manifold[m].anchorA - position_[j];
+            manifold[m].anchorA -= position_[i];
+            sink.push_back(manifold[m]);
+        }
+    };
+
+    if (bruteForce_) {
+        contactChunks_.resize(1);
+        std::vector<Contact>& sink = contactChunks_[0];
+        sink.clear();
+        const uint32_t n = static_cast<uint32_t>(position_.size());
+        uint64_t localPairs = 0, localNear = 0;
+        for (uint32_t i = 0; i + 1 < n; ++i) {
+            const Vec3 pi = position_[i];
+            const float ri = reach_[i] + sweep_[i];
+            for (uint32_t j = i + 1; j < n; ++j) {
+                ++localPairs;
+                const Vec3 d = position_[j] - pi;
+                const float cull = ri + reach_[j] + sweep_[j];
+                if (length2(d) > cull * cull) continue;
+                ++localNear;
+                consider(i, j, sink);
+            }
+        }
+        contacts_.swap(sink);
+        sink.clear();
+        stats_.pairsTested = localPairs;
+        stats_.nearPairs = localNear;
+        stats_.duplicatePairs = 0;
+        stats_.contacts = static_cast<uint32_t>(contacts_.size());
+        return;
+    }
 
     auto scan = [&](size_t begin, size_t end) {
         std::vector<Contact>& sink = contactChunks_[begin / BUCKET_GRAIN];
@@ -912,9 +980,6 @@ void PhysicsWorld::findContacts(JobSystem* jobs) {
                 uint32_t runEnd = runStart + 1;
                 uint32_t awake = entries_[runStart].awake;
                 while (runEnd < to && entries_[runEnd].cell == key) awake += entries_[runEnd++].awake;
-                // A cell where everything is asleep only produces pairs that
-                // are both asleep, and those are skipped except on an audit
-                // frame.
                 if (awake == 0 && !audit) {
                     runStart = runEnd;
                     continue;
@@ -929,55 +994,13 @@ void PhysicsWorld::findContacts(JobSystem* jobs) {
                         if (dx * dx + dy * dy + dz * dz > cull * cull) continue;
                         ++localNear;
                         const uint32_t i = std::min(ea.body, eb.body), j = std::max(ea.body, eb.body);
-                        // Two sleepers cannot push each other apart, so an
-                        // overlap that appeared just as the second one fell
-                        // asleep would otherwise be permanent. Every audit
-                        // frame the pair is measured again — but only to wake
-                        // them, since solving a contact for a body the rest of
-                        // the step skips would leave velocity nobody applies.
-                        if (asleep_[i] && asleep_[j]) {
-                            if (!audit) continue;
-                            Contact probe[4];
-                            probe[0] = Contact{i, j, Vec3{0, 1, 0}, 0, 0, Vec3{0, 0, 0}, Vec3{0, 0, 0}};
-                            if (narrowAll(i, j, probe, 0.0f) > 0 && probe[0].depth > kSleepDepth) {
-                                // The timer has to go back with the flag: this
-                                // pair contributes no contact this step, so
-                                // nothing else would stop the sleep test at the
-                                // end of the step from putting them straight
-                                // back under.
-                                std::atomic_ref<uint8_t>(asleep_[i]).store(0, std::memory_order_relaxed);
-                                std::atomic_ref<uint8_t>(asleep_[j]).store(0, std::memory_order_relaxed);
-                                sleepTimer_[i] = 0.0f;
-                                sleepTimer_[j] = 0.0f;
-                            }
-                            continue;
-                        }
                         if (key != packCell(std::max(bodyLo_[i * 3], bodyLo_[j * 3]),
                                             std::max(bodyLo_[i * 3 + 1], bodyLo_[j * 3 + 1]),
                                             std::max(bodyLo_[i * 3 + 2], bodyLo_[j * 3 + 2]))) {
                             ++localDuplicates;
                             continue;
                         }
-                        Contact manifold[4];
-                        manifold[0] = Contact{i, j, Vec3{0, 1, 0}, 0, 0, Vec3{0, 0, 0}, Vec3{0, 0, 0}};
-                        int found = narrowAll(i, j, manifold, motion_[i] + motion_[j] + kManifoldSkin);
-                        if (found == 0) continue;
-                        const Contact& contact = manifold[0];
-                        // Only a body that is actually moving wakes a sleeper,
-                        // or one jittering body would cascade through a settled
-                        // pile and wake all of it. An overlap deep enough to
-                        // matter wakes it regardless: once both sides sleep,
-                        // nothing is left to push them apart.
-                        const bool deep = contact.depth > kWakeDepth;
-                        if (asleep_[i] && (deep || length2(body_[j].v) > wakeSpeed2))
-                            std::atomic_ref<uint8_t>(asleep_[i]).store(0, std::memory_order_relaxed);
-                        if (asleep_[j] && (deep || length2(body_[i].v) > wakeSpeed2))
-                            std::atomic_ref<uint8_t>(asleep_[j]).store(0, std::memory_order_relaxed);
-                        for (int m = 0; m < found; ++m) {
-                            manifold[m].anchorB = manifold[m].anchorA - position_[j];
-                            manifold[m].anchorA -= position_[i];
-                            sink.push_back(manifold[m]);
-                        }
+                        consider(i, j, sink);
                     }
                 }
                 runStart = runEnd;
@@ -1731,11 +1754,55 @@ float rayBox(const Vec3& origin, const Vec3& dir, const Vec3& center, const Vec3
 
 }  // namespace
 
+float PhysicsWorld::rayBody(uint32_t b, const Vec3& origin, const Vec3& d, Vec3& normal) const {
+    float t;
+    if (kind_[b] == static_cast<uint32_t>(ColliderKind::Sphere)) {
+        t = raySphere(origin, d, position_[b], radius_[b]);
+        if (t >= 0.0f) normal = normalize(origin + d * t - position_[b]);
+    } else if (rotated_[b]) {
+        const Quat inv = conjugate(orientation_[b]);
+        t = rayBox(rotate(inv, origin - position_[b]), rotate(inv, d), Vec3{0, 0, 0}, halfExtent_[b], normal);
+        if (t >= 0.0f) normal = rotate(orientation_[b], normal);
+    } else {
+        t = rayBox(origin, d, position_[b], halfExtent_[b], normal);
+    }
+    return t;
+}
+
+bool PhysicsWorld::sphereTouchesBody(uint32_t b, const Vec3& center, float radius) const {
+    if (kind_[b] == static_cast<uint32_t>(ColliderKind::Sphere)) {
+        float sum = radius + radius_[b];
+        return length2(position_[b] - center) < sum * sum;
+    }
+    Vec3 d = center - position_[b];
+    if (rotated_[b]) d = rotate(conjugate(orientation_[b]), d);
+    Vec3 clamped{std::clamp(d.x, -halfExtent_[b].x, halfExtent_[b].x),
+                 std::clamp(d.y, -halfExtent_[b].y, halfExtent_[b].y),
+                 std::clamp(d.z, -halfExtent_[b].z, halfExtent_[b].z)};
+    return length2(d - clamped) < radius * radius;
+}
+
 RayHit PhysicsWorld::raycast(const Vec3& origin, const Vec3& dir, float maxDistance) const {
     RayHit hit;
     float len = length(dir);
-    if (entries_.empty() || len < 1e-8f || maxDistance <= 0.0f) return hit;
+    if (len < 1e-8f || maxDistance <= 0.0f) return hit;
     const Vec3 d = dir / len;
+    if (bruteForce_) {
+        float best = maxDistance;
+        for (uint32_t b = 0; b < position_.size(); ++b) {
+            Vec3 normal;
+            float t = rayBody(b, origin, d, normal);
+            if (t < 0.0f || t > best) continue;
+            best = t;
+            hit.hit = true;
+            hit.entity = entity_[b];
+            hit.distance = t;
+            hit.point = origin + d * t;
+            hit.normal = normal;
+        }
+        return hit;
+    }
+    if (entries_.empty()) return hit;
 
     // The ray walks cells in order, so the first hit found in a cell is final
     // once the ray has left that cell — but not before: a body registered in
@@ -1767,20 +1834,8 @@ RayHit PhysicsWorld::raycast(const Vec3& origin, const Vec3& dir, float maxDista
             const GridEntry& e = entries_[i];
             if (e.cell != key) continue;
             const uint32_t b = e.body;
-            float t;
             Vec3 normal;
-            if (kind_[b] == static_cast<uint32_t>(ColliderKind::Sphere)) {
-                t = raySphere(origin, d, position_[b], radius_[b]);
-                if (t >= 0.0f) normal = normalize(origin + d * t - position_[b]);
-            } else if (rotated_[b]) {
-                // The ray meets a turned box in the box's own frame, where it
-                // is the same slab test; only the face normal comes back out.
-                const Quat inv = conjugate(orientation_[b]);
-                t = rayBox(rotate(inv, origin - position_[b]), rotate(inv, d), Vec3{0, 0, 0}, halfExtent_[b], normal);
-                if (t >= 0.0f) normal = rotate(orientation_[b], normal);
-            } else {
-                t = rayBox(origin, d, position_[b], halfExtent_[b], normal);
-            }
+            float t = rayBody(b, origin, d, normal);
             if (t < 0.0f || t > best) continue;
             best = t;
             hit.hit = true;
@@ -1808,7 +1863,13 @@ RayHit PhysicsWorld::raycast(const Vec3& origin, const Vec3& dir, float maxDista
 }
 
 void PhysicsWorld::overlapSphere(const Vec3& center, float radius, std::vector<Entity>& out) const {
-    if (entries_.empty() || radius <= 0.0f) return;
+    if (radius <= 0.0f) return;
+    if (bruteForce_) {
+        for (uint32_t b = 0; b < position_.size(); ++b)
+            if (sphereTouchesBody(b, center, radius)) out.push_back(entity_[b]);
+        return;
+    }
+    if (entries_.empty()) return;
     const float inv = 1.0f / cell_;
     int32_t lo[3], hi[3];
     for (int axis = 0; axis < 3; ++axis) {
@@ -1828,19 +1889,7 @@ void PhysicsWorld::overlapSphere(const Vec3& center, float radius, std::vector<E
                     const GridEntry& e = entries_[i];
                     if (e.cell != key) continue;
                     const uint32_t b = e.body;
-                    bool overlaps;
-                    if (kind_[b] == static_cast<uint32_t>(ColliderKind::Sphere)) {
-                        float sum = radius + radius_[b];
-                        overlaps = length2(position_[b] - center) < sum * sum;
-                    } else {
-                        Vec3 d = center - position_[b];
-                        if (rotated_[b]) d = rotate(conjugate(orientation_[b]), d);
-                        Vec3 clamped{std::clamp(d.x, -halfExtent_[b].x, halfExtent_[b].x),
-                                     std::clamp(d.y, -halfExtent_[b].y, halfExtent_[b].y),
-                                     std::clamp(d.z, -halfExtent_[b].z, halfExtent_[b].z)};
-                        overlaps = length2(d - clamped) < radius * radius;
-                    }
-                    if (!overlaps) continue;
+                    if (!sphereTouchesBody(b, center, radius)) continue;
                     Entity found = entity_[b];
                     if (std::find(out.begin() + static_cast<ptrdiff_t>(first), out.end(), found) == out.end())
                         out.push_back(found);
