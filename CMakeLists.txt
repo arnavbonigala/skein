@@ -46,6 +46,7 @@ add_library(skein STATIC
   src/ecs/world.cpp
   src/scene/scene.cpp
   src/scene/serialize.cpp
+  src/scene/particles.cpp
   src/assets/mesh.cpp
   src/assets/obj.cpp
   src/assets/font.cpp
@@ -109,6 +110,7 @@ add_executable(skein_tests
   tests/test_scene.cpp
   tests/test_script.cpp
   tests/test_assets.cpp
+  tests/test_particles.cpp
 )
 target_include_directories(skein_tests PRIVATE tests)
 target_link_libraries(skein_tests PRIVATE skein)
