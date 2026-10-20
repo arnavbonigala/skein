@@ -10,13 +10,14 @@ How the pieces fit, and why they are shaped that way. Numbers live in
 |---|---|
 | `src/core` | `Vec3`/`Quat`/`Mat4`, job system, profiler |
 | `src/ecs` | Sparse-set `World`, `Pool<T>`, type-erased pool registry |
-| `src/scene` | Components, `Scene`, transform hierarchy, serialization |
-| `src/render` | Frustum + cluster culling, render list, GL renderer, shaders |
+| `src/scene` | Components, `Scene`, transform hierarchy, serialization, particles |
+| `src/render` | Frustum + cluster culling, render list, GL renderer, post chain, particles, overlay, recorder |
 | `src/physics` | Broadphase, narrowphase, solver, queries |
-| `src/assets` | Mesh storage, primitives, OBJ parser |
+| `src/assets` | Mesh storage, primitives, OBJ parser, distance field fonts |
 | `src/script` | Lua host and bindings |
 | `src/app` | Demo scene construction, window, main loop |
 | `bench`, `tests` | The two harnesses |
+| `third_party` | stb_truetype, the one vendored file |
 
 ## The ECS
 
@@ -205,6 +206,19 @@ silhouettes and creases are inked and a floor at a grazing angle is not.
 The recorder reads through a ring of three pixel buffer objects, so frame N is
 copied off the GPU while frame N + 1 renders and nothing waits on a readback.
 
+### Particles and overlay
+
+Particles draw inside the scene pass, so they are lit, fogged, outlined and
+bloomed like everything else. Their buffer is filled before the shadow pass
+starts. Apple's GL runs on Metal, and a buffer write in the middle of a pass
+ends the pass: the 4x MSAA colour and depth targets are stored and reloaded,
+which cost a fixed 4 ms at 1080p even for one particle. Uploading first brought
+30,000 particles down to noise.
+
+The overlay draws after post-processing into the final target, in pixels from
+the top-left. Text comes from a 48 px signed distance field, so a 200 px title
+stays sharp and an outline is one more threshold in the same shader.
+
 ## Serialization
 
 A versioned binary format writing each registered pool verbatim.
@@ -231,7 +245,7 @@ raises is unbound and reported rather than killing the frame.
 
 ## Testing strategy
 
-101 tests, no framework — a `TEST` macro, a `CHECK`, and a main that runs them.
+135 tests, no framework — a `TEST` macro, a `CHECK`, and a main that runs them.
 
 The rule for what earns a test: it must be something that can be **quietly**
 wrong. Not "does `add` return the component" but:

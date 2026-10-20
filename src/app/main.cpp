@@ -13,6 +13,7 @@
 #include "render/overlay.hpp"
 #include "render/recorder.hpp"
 #include "render/renderer.hpp"
+#include "scene/particles.hpp"
 #include "scene/serialize.hpp"
 
 using namespace skein;
@@ -33,6 +34,7 @@ struct AppState {
     JobSystem* jobs = nullptr;
     bool vsync = true;
     bool hud = true;
+    bool burst = false;
 };
 
 AppState g;
@@ -47,6 +49,7 @@ void printHelp() {
         "  C      freeze the culling camera        P      dump the frame profile\n"
         "  V      vsync                            Space bar pause is O\n"
         "  G      post-processing on or off        H      heads-up display\n"
+        "  K      confetti\n"
         "  --resolution 1920x1080 renders at a fixed size\n"
         "  F5/F9  save or load scene.skn         --record out.mp4 to capture video\n\n");
 }
@@ -90,6 +93,9 @@ void keyCallback(GLFWwindow* window, int key, int scancode, int action, int mods
             break;
         case GLFW_KEY_P:
             std::printf("\n%s\n", Profiler::instance().report().c_str());
+            break;
+        case GLFW_KEY_K:
+            g.burst = true;
             break;
         case GLFW_KEY_H:
             g.hud = !g.hud;
@@ -190,6 +196,37 @@ void handleMovement(GLFWwindow* window, float dt) {
     if (glfwGetKey(window, GLFW_KEY_LEFT_CONTROL) == GLFW_PRESS) delta.y -= 1;
     float boost = glfwGetKey(window, GLFW_KEY_LEFT_SHIFT) == GLFW_PRESS ? 4.0f : 1.0f;
     g.camera.move(delta, dt, boost);
+}
+
+void celebrate(ParticleSystem& confetti, ParticleSystem& sparks, Random& random) {
+    ParticleBurst c;
+    c.position = Vec3{random.uniform(-4.0f, 4.0f), 6.0f, random.uniform(-3.0f, 3.0f)};
+    c.velocity = Vec3{0, 1, 0};
+    c.speed = 9.0f;
+    c.spread = 0.9f;
+    c.count = 1500;
+    c.life = 5.0f;
+    c.size = 0.07f;
+    c.spin = 12.0f;
+    c.colorCount = 4;
+    c.colors[0] = Vec3{0.95f, 0.3f, 0.35f};
+    c.colors[1] = Vec3{0.3f, 0.75f, 0.95f};
+    c.colors[2] = Vec3{1.0f, 0.82f, 0.25f};
+    c.colors[3] = Vec3{0.45f, 0.9f, 0.5f};
+    confetti.burst(c, random);
+
+    ParticleBurst s;
+    s.position = c.position;
+    s.velocity = Vec3{0, 1, 0};
+    s.speed = 7.0f;
+    s.spread = 1.4f;
+    s.count = 400;
+    s.life = 1.2f;
+    s.size = 0.06f;
+    s.spin = 0.0f;
+    s.glow = 6.0f;
+    s.colors[0] = Vec3{1.0f, 0.65f, 0.3f};
+    sparks.burst(s, random);
 }
 
 void drawHud(Overlay& overlay, const Renderer& renderer, const Demo& demo) {
@@ -307,6 +344,17 @@ int main(int argc, char** argv) {
     DebugDraw debug;
     if (!debug.init(error)) std::fprintf(stderr, "debug draw: %s\n", error.c_str());
 
+    ParticleSystem confetti, sparks;
+    confetti.floor = 0.01f;
+    confetti.drag = 1.6f;
+    sparks.additive = true;
+    sparks.round = true;
+    sparks.drag = 1.0f;
+    sparks.floor = 0.0f;
+    renderer.particles = {&confetti, &sparks};
+    Random particleRandom(42);
+    double nextBurst = showcase ? 1.0 : 1e30;
+
     Overlay overlay;
     if (!overlay.init("", error)) {
         std::fprintf(stderr, "overlay: %s\n", error.c_str());
@@ -422,7 +470,16 @@ int main(int argc, char** argv) {
         glfwPollEvents();
         handleMovement(window, dt);
 
-        if (!g.paused) demo.update(dt, &jobs);
+        if (!g.paused) {
+            demo.update(dt, &jobs);
+            if (g.burst || now >= nextBurst) {
+                celebrate(confetti, sparks, particleRandom);
+                g.burst = false;
+                if (now >= nextBurst) nextBurst = now + 2.5;
+            }
+            confetti.update(dt);
+            sparks.update(dt);
+        }
 
         int windowWidth = 0, windowHeight = 0;
         glfwGetFramebufferSize(window, &windowWidth, &windowHeight);

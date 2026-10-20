@@ -48,7 +48,7 @@ brew install cmake lua glfw
 cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
 cmake --build build -j
 
-./build/skein_tests            # 101 tests
+./build/skein_tests            # 135 tests
 ./build/skein_bench            # headless CPU benchmark
 ./build/skein_bench --sweep    # plus the 25k → 1M scaling sweep
 ./build/skein_demo             # interactive window
@@ -97,6 +97,7 @@ case. Full tables, method and A/B protocol in [BENCHMARKS.md](BENCHMARKS.md).
 | **Assets** | Hand-written OBJ parser — all four face index forms, negative indices, fan triangulation, welding, generated normals. Walked in place rather than through `getline`/`sscanf`, welded through an open-addressed table. Batch loads parse concurrently and register deterministically. |
 | **Serialization** | Versioned binary format writing each registered pool verbatim. Entity ids, generations and holes survive a round trip; unknown or size-mismatched pools are skipped rather than fatal. |
 | **Text** | `Font` bakes printable ASCII from any TrueType file into a signed distance field atlas through a vendored stb_truetype, so one 48 px bake draws sharp, kerned text at any size. `Overlay` batches screen-space rects and text, with outlines, into one draw on top of the final image, so recordings carry the HUD. |
+| **Particles** | `ParticleSystem` keeps the GPU-ready instance array apart from the simulation state, so a frame's upload is one copy. Seeded bursts replay exactly, with gravity, drag, a bouncing floor and spin. Solid particles depth-test and shrink out, so they need no sorting; additive ones glow into bloom. Every system uploads before the scene pass, so 30,000 particles add no measurable GPU time. |
 | **Recording** | `VideoRecorder` reads the final target through a ring of pixel buffer objects and pipes it into ffmpeg's hardware H.264 encoder. `skein_demo --showcase --resolution 1920x1080 --record out.mp4`. |
 | **Scripting** | Lua 5.5 through the C API, driving the same pools the C++ systems read — a scripted entity is culled, lit and simulated exactly like a native one. `skein.raycast`, `skein.overlap_sphere`, `skein.joint`/`unjoint`. A callback that errors is unbound and reported instead of killing the frame. |
 
@@ -196,7 +197,7 @@ parallel result is **bitwise identical** to the serial one over 90 steps of a
 
 ## Tests
 
-101 tests, no framework. They cover the places where being wrong is quiet:
+135 tests, no framework. They cover the places where being wrong is quiet:
 
 - The hashed grid returns **exactly** the brute-force contact set, even with collider sizes varying 70x
 - The coloured parallel solver lands **bitwise** on the serial result
