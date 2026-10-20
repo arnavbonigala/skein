@@ -29,6 +29,14 @@ struct RenderOptions {
     float shadowExtent = 55.0f;
     float shadowDistance = 120.0f;
     bool hdr = true;
+    float toon = 0.0f;
+    float rim = 0.0f;
+    bool skyGradient = false;
+    Vec3 skyZenith{0.25f, 0.5f, 0.9f};
+    Vec3 skyHorizon{0.75f, 0.85f, 0.95f};
+    Vec3 skyGround{0.4f, 0.45f, 0.4f};
+    float sunSize = 0.035f;
+    float time = 0.0f;
     PostOptions post;
 };
 
@@ -90,6 +98,8 @@ private:
     ParticleRenderer particleRenderer_;
     Shader lit_;
     Shader depth_;
+    Shader sky_;
+    unsigned skyVao_ = 0;
     InstanceBuffer instances_;
     std::vector<GpuMesh> meshes_;
 

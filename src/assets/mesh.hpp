@@ -43,6 +43,7 @@ struct Material {
     float roughness = 0.5f;
     Vec3 emissive{0, 0, 0};
     float metallic = 0.0f;
+    float wind = 0.0f;
     std::string name;
 };
 

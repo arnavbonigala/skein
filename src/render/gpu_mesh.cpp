@@ -101,6 +101,9 @@ bool GpuMesh::upload(const MeshData& mesh, unsigned instanceVbo) {
     glEnableVertexAttribArray(2);
     glVertexAttribPointer(2, 2, GL_FLOAT, GL_FALSE, sizeof(Vertex),
                           reinterpret_cast<void*>(offsetof(Vertex, uv)));
+    glEnableVertexAttribArray(7);
+    glVertexAttribPointer(7, 4, GL_UNSIGNED_BYTE, GL_TRUE, sizeof(Vertex),
+                          reinterpret_cast<void*>(offsetof(Vertex, color)));
 
     glBindBuffer(GL_ARRAY_BUFFER, instanceVbo_);
     for (int col = 0; col < 4; ++col) {

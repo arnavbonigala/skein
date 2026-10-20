@@ -174,6 +174,13 @@ attribute and no change to batching. The shadow map follows the point the camera
 looks at and snaps to its own texels, so shadows do not shimmer as the camera
 moves.
 
+Stylised looks are options on the same shader. `toon` blends diffuse into two
+bands and the shadow edge into a hard step, `rim` adds a sunlit edge, and
+`skyGradient` draws a zenith-to-horizon sky after opaque geometry, at the far
+plane, so it only shades pixels nothing covered. Fog fades distant geometry to
+that sky in the view direction, so hills melt into the horizon. A material's
+`wind` sways vertices by the square of their height above the mesh origin.
+
 ### Post-processing
 
 ```
@@ -245,7 +252,7 @@ raises is unbound and reported rather than killing the frame.
 
 ## Testing strategy
 
-135 tests, no framework — a `TEST` macro, a `CHECK`, and a main that runs them.
+138 tests, no framework — a `TEST` macro, a `CHECK`, and a main that runs them.
 
 The rule for what earns a test: it must be something that can be **quietly**
 wrong. Not "does `add` return the component" but:

@@ -48,7 +48,7 @@ brew install cmake lua glfw
 cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
 cmake --build build -j
 
-./build/skein_tests            # 135 tests
+./build/skein_tests            # 138 tests
 ./build/skein_bench            # headless CPU benchmark
 ./build/skein_bench --sweep    # plus the 25k → 1M scaling sweep
 ./build/skein_demo             # interactive window
@@ -90,7 +90,7 @@ case. Full tables, method and A/B protocol in [BENCHMARKS.md](BENCHMARKS.md).
 | **ECS** | Sparse set — dense array plus entity→index map per type. Linear iteration, swap-and-pop removal, 64-bit handles with a generation counter so a stale handle never resolves to a recycled slot. Pools registered by stable name behind a type-erased interface, which is what lets serialization walk them generically. |
 | **Hierarchy** | No recursion, no pointer chasing. Depths are memoized and counting-sorted into a flat order, so each level is a contiguous span whose parents are already final — and therefore trivially parallel. |
 | **Jobs** | One deque per worker, LIFO for the owner and FIFO for thieves. The submitter participates rather than blocking, so nested `parallelFor` makes progress instead of deadlocking. One task per *worker*, not per chunk, with chunks handed out through an atomic cursor. |
-| **Renderer** | OpenGL 4.1 core against the macOS system framework — no loader library. Counting-sorted `(mesh, material)` batches, one orphaned instance buffer per frame with the shadow pass appended so there is a single upload. Blinn-Phong with a metallic tint, 2048² PCF sun shadows, 32 point lights chosen per frame by distance, per-instance tint. HDR post: SSAO, bloom, toon outlines, ACES, FXAA, at a fixed output resolution. |
+| **Renderer** | OpenGL 4.1 core against the macOS system framework — no loader library. Counting-sorted `(mesh, material)` batches, one orphaned instance buffer per frame with the shadow pass appended so there is a single upload. Blinn-Phong with a metallic tint, 2048² PCF sun shadows, 32 point lights chosen per frame by distance, per-instance tint and per-vertex colour. Optional cel bands, rim light, a gradient sky with a sun disc that the fog blends into, and wind sway per material. HDR post: SSAO, bloom, toon outlines, ACES, FXAA, at a fixed output resolution. |
 | **Culling** | Gribb-Hartmann planes, sphere prepass, center/extent AABB — with the per-object test as the *fallback*. See [Cluster culling](#cluster-culling) below. |
 | **Physics** | Hashed uniform grid, 15-axis SAT with Sutherland-Hodgman clipping, warm-started sequential impulses solved over a coloured contact graph in four substeps of two iterations. See [The solver](#the-solver) below. |
 | **Joints** | Distance constraints solved by the same accumulated-impulse machinery as contacts, with XPBD compliance exposed as metres of stretch per newton-second. Length error routes through the split-impulse channel, not as a bias inside the carried impulse — a bias there replays last frame's correction on top of this frame's and a hanging chain climbs above its own anchor. |
@@ -197,7 +197,7 @@ parallel result is **bitwise identical** to the serial one over 90 steps of a
 
 ## Tests
 
-135 tests, no framework. They cover the places where being wrong is quiet:
+138 tests, no framework. They cover the places where being wrong is quiet:
 
 - The hashed grid returns **exactly** the brute-force contact set, even with collider sizes varying 70x
 - The coloured parallel solver lands **bitwise** on the serial result

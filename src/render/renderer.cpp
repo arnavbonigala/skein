@@ -17,11 +17,13 @@ Renderer::~Renderer() {
     if (shadowFbo_) glDeleteFramebuffers(1, &shadowFbo_);
     if (shadowTexture_) glDeleteTextures(1, &shadowTexture_);
     if (timerQueries_[0]) glDeleteQueries(2, timerQueries_);
+    if (skyVao_) glDeleteVertexArrays(1, &skyVao_);
 }
 
 bool Renderer::init(std::string& error) {
     if (!lit_.compile(shaders::LIT_VERTEX, shaders::LIT_FRAGMENT, error)) return false;
     if (!depth_.compile(shaders::DEPTH_VERTEX, shaders::DEPTH_FRAGMENT, error)) return false;
+    if (!sky_.compile(shaders::SKY_VERTEX, shaders::SKY_FRAGMENT, error)) return false;
     if (!post_.init(error)) return false;
     if (!particleRenderer_.init(error)) return false;
     if (!createShadowTarget()) {
@@ -29,6 +31,7 @@ bool Renderer::init(std::string& error) {
         return false;
     }
     glGenQueries(2, timerQueries_);
+    glGenVertexArrays(1, &skyVao_);
 
     glEnable(GL_DEPTH_TEST);
     glEnable(GL_CULL_FACE);
@@ -140,6 +143,7 @@ void Renderer::drawList(const RenderList& list, const Assets& assets, Shader& sh
             shader.setVec3("uEmissive", mat.emissive);
             shader.setFloat("uRoughness", mat.roughness);
             shader.setFloat("uMetallic", mat.metallic);
+            shader.setFloat("uWind", mat.wind);
         }
         if (options.instancing) {
             mesh.drawInstanced(instanceBase + batch.first, batch.count);
@@ -245,6 +249,13 @@ void Renderer::render(Scene& scene, const Assets& assets, const Mat4& view, cons
         lit_.setVec3("uFogColor", options.skyColor);
         lit_.setFloat("uFogDensity", options.fogDensity);
         lit_.setInt("uShadowEnabled", options.shadows ? 1 : 0);
+        lit_.setFloat("uTime", options.time);
+        lit_.setFloat("uToon", options.toon);
+        lit_.setFloat("uRim", options.rim);
+        lit_.setInt("uSkyGradient", options.skyGradient ? 1 : 0);
+        lit_.setVec3("uSkyZenith", options.skyZenith);
+        lit_.setVec3("uSkyHorizon", options.skyHorizon);
+        lit_.setVec3("uSkyGround", options.skyGround);
         lit_.setFloat("uShadowTexel", 1.0f / static_cast<float>(shadowSize_));
         lit_.setInt("uPointCount", static_cast<int>(pointLights_.size()));
         if (!pointLights_.empty()) {
@@ -262,6 +273,25 @@ void Renderer::render(Scene& scene, const Assets& assets, const Mat4& view, cons
         lit_.setInt("uShadowMap", 0);
 
         drawList(mainList_, assets, lit_, true, 0, stats_.drawCalls, stats_.triangles);
+
+        if (options.skyGradient) {
+            glDepthFunc(GL_LEQUAL);
+            glDepthMask(GL_FALSE);
+            sky_.bind();
+            sky_.setMat4("uInvViewProj", inverse(viewProj));
+            sky_.setVec3("uCameraPos", cameraPosition);
+            sky_.setVec3("uSkyZenith", options.skyZenith);
+            sky_.setVec3("uSkyHorizon", options.skyHorizon);
+            sky_.setVec3("uSkyGround", options.skyGround);
+            sky_.setVec3("uSunDirection", sunDirection_);
+            sky_.setVec3("uSunColor", sunColor_);
+            sky_.setFloat("uSunSize", options.sunSize);
+            sky_.setInt("uHdr", options.hdr ? 1 : 0);
+            glBindVertexArray(skyVao_);
+            glDrawArrays(GL_TRIANGLES, 0, 3);
+            glDepthMask(GL_TRUE);
+            glDepthFunc(GL_LESS);
+        }
 
         particleRenderer_.draw(particles, view, viewProj, options.ambientSky + sunColor_ * (sunIntensity_ * 0.5f));
     }
