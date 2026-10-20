@@ -110,7 +110,7 @@ vec3 shade(vec3 normal, vec3 view, vec3 lightDir, vec3 radiance, vec3 albedo, fl
     ndl = mix(ndl, cel, uToon);
     vec3 halfway = normalize(lightDir + view);
     float spec = pow(max(dot(normal, halfway), 0.0), gloss) * (gloss + 8.0) / 25.0;
-    spec = mix(spec, smoothstep(0.55, 0.6, spec) * 0.5, uToon);
+    spec = mix(spec, smoothstep(0.55, 0.6, spec) * 0.5 * smoothstep(0.75, 0.45, uRoughness), uToon);
     vec3 specularTint = mix(vec3(1.0), albedo, uMetallic);
     return radiance * ndl * (albedo * (1.0 - uMetallic * 0.6) + specularTint * spec);
 }
