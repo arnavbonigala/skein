@@ -1771,3 +1771,31 @@ TEST(rays_and_overlaps_meet_a_plane_from_its_front) {
     physics.overlapSphere(Vec3{3, 1.6f, 0}, 0.5f, found);
     CHECK(found.empty());
 }
+
+TEST(a_ray_batch_answers_exactly_what_single_rays_do) {
+    Scene scene;
+    std::mt19937 rng(8);
+    std::uniform_real_distribution<float> p(-10.0f, 10.0f);
+    for (int i = 0; i < 400; ++i) spawnSphere(scene, Vec3{p(rng), p(rng) + 12.0f, p(rng)}, Vec3{0, 0, 0}, 0.6f, 0.0f);
+    spawnPlane(scene, Vec3{0, 0, 0}, Quat{});
+    PhysicsWorld physics = unboundedWorld();
+    physics.step(scene, 0.0f, nullptr);
+    std::vector<Ray> rays(3000);
+    for (Ray& r : rays) {
+        r.origin = Vec3{p(rng), p(rng) + 12.0f, p(rng)};
+        r.dir = Vec3{p(rng), p(rng), p(rng)};
+        r.maxDistance = 25.0f;
+    }
+    std::vector<RayHit> batch(rays.size());
+    JobSystem jobs(4);
+    physics.raycastBatch(rays.data(), rays.size(), batch.data(), &jobs);
+    int hits = 0;
+    for (size_t i = 0; i < rays.size(); ++i) {
+        RayHit single = physics.raycast(rays[i].origin, rays[i].dir, rays[i].maxDistance);
+        CHECK_EQ(single.hit, batch[i].hit);
+        CHECK_EQ(single.entity, batch[i].entity);
+        CHECK(single.distance == batch[i].distance);
+        if (single.hit) ++hits;
+    }
+    CHECK(hits > 1000);
+}

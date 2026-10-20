@@ -101,6 +101,12 @@ struct RayHit {
     Vec3 normal{0, 0, 0};
 };
 
+struct Ray {
+    Vec3 origin{0, 0, 0};
+    Vec3 dir{0, 0, 1};
+    float maxDistance = 100.0f;
+};
+
 struct SensorOverlap {
     Entity sensor = 0;
     Entity other = 0;
@@ -131,6 +137,9 @@ public:
     /// same caveat as `raycast`: it answers for the last step's positions.
     void overlapSphere(const Vec3& center, float radius, std::vector<Entity>& out,
                        uint32_t layers = 0xFFFFFFFFu) const;
+
+    void raycastBatch(const Ray* rays, size_t count, RayHit* out, JobSystem* jobs = nullptr,
+                      uint32_t layers = 0xFFFFFFFFu) const;
 
     const std::vector<SensorOverlap>& sensorOverlaps() const { return sensorOverlaps_; }
     void reportContacts(std::vector<ContactReport>& out, float minImpulse = 0.0f) const;

@@ -2128,6 +2128,16 @@ RayHit PhysicsWorld::raycast(const Vec3& origin, const Vec3& dir, float maxDista
     return body.hit && (!hit.hit || body.distance < hit.distance) ? body : hit;
 }
 
+void PhysicsWorld::raycastBatch(const Ray* rays, size_t count, RayHit* out, JobSystem* jobs, uint32_t layers) const {
+    auto cast = [&](size_t begin, size_t end) {
+        for (size_t i = begin; i < end; ++i) out[i] = raycast(rays[i].origin, rays[i].dir, rays[i].maxDistance, layers);
+    };
+    if (jobs && count >= 256)
+        jobs->parallelFor(count, 128, cast);
+    else
+        cast(0, count);
+}
+
 RayHit PhysicsWorld::castBodies(const Vec3& origin, const Vec3& d, float maxDistance, uint32_t layers) const {
     RayHit hit;
     if (bruteForce_) {

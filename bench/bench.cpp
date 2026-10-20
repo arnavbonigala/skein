@@ -877,6 +877,13 @@ int main(int argc, char** argv) {
         row("4,096 rays into 30,000 bodies", t.median,
             format("%.2f us per ray, %.2f M rays/s, %u hit", t.median * 1000.0 / 4096.0,
                    4096.0 / (t.median / 1000.0) / 1e6, hits));
+        std::vector<Ray> batch;
+        for (const auto& [origin, dir] : rays) batch.push_back(Ray{origin, dir, 200.0f});
+        std::vector<RayHit> answers(batch.size());
+        Timing batched = measure(2, 20, [&] { demo.physics.raycastBatch(batch.data(), batch.size(), answers.data(), &jobs); });
+        row("the same rays as one batch", batched.median,
+            format("%.2f M rays/s, %s", 4096.0 / (batched.median / 1000.0) / 1e6,
+                   speedup(t.median, batched.median).c_str()));
 
         // The same queries with no acceleration structure, on a tenth of the
         // rays because it is that much slower.
